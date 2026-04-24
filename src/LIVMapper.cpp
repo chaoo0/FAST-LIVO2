@@ -11,6 +11,11 @@ which is included as part of this source code package.
 */
 
 #include "LIVMapper.h"
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <limits>
+#include <sstream>
 #include <vikit/camera_loader.h>
 
 using namespace Sophus;
@@ -42,13 +47,20 @@ LIVMapper::LIVMapper(rclcpp::Node::SharedPtr &node, std::string node_name, const
   voxelmap_manager.reset(new VoxelMapManager(voxel_config, voxel_map));
   vio_manager.reset(new VIOManager());
   root_dir = ROOT_DIR;
+  initializeMambaPoseTrainDataExporter();
   initializeFiles();
   initializeComponents(this->node);          // initialize components errors
   path.header.stamp = this->node->now();
   path.header.frame_id = "camera_init";
 }
 
-LIVMapper::~LIVMapper() {}
+LIVMapper::~LIVMapper()
+{
+  if (fout_mamba_pose_train_data.is_open())
+  {
+    fout_mamba_pose_train_data.close();
+  }
+}
 
 void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
 {
@@ -63,6 +75,26 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
     else
     {
       return node->get_parameter(name).get_value<ParameterT>();
+    }
+  };
+  auto try_declare_alias = [node]<typename ParameterT>(const std::string & preferred_name,
+    const std::string & fallback_name, const ParameterT & default_value)
+  {
+    try
+    {
+      if (!node->has_parameter(preferred_name))
+      {
+        return node->declare_parameter<ParameterT>(preferred_name, default_value);
+      }
+      return node->get_parameter(preferred_name).get_value<ParameterT>();
+    }
+    catch (const std::exception &)
+    {
+      if (!node->has_parameter(fallback_name))
+      {
+        return node->declare_parameter<ParameterT>(fallback_name, default_value);
+      }
+      return node->get_parameter(fallback_name).get_value<ParameterT>();
     }
   };
 
@@ -123,6 +155,33 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   try_declare.template operator()<int>("publish.pub_scan_num", 1);
   try_declare.template operator()<bool>("publish.pub_effect_point_en", false);
   try_declare.template operator()<bool>("publish.dense_map_en", false);
+  mamba_pose_enabled = try_declare_alias.template operator()<bool>("mamba_pose/enabled", "mamba_pose.enabled", false);
+  mamba_pose_history_len = try_declare_alias.template operator()<int>("mamba_pose/history_len", "mamba_pose.history_len", 10);
+  mamba_pose_min_ready_frames = try_declare_alias.template operator()<int>("mamba_pose/min_ready_frames", "mamba_pose.min_ready_frames", 3);
+  mamba_pose_debug_log_en = try_declare_alias.template operator()<bool>("mamba_pose/debug_log_en", "mamba_pose.debug_log_en", false);
+  mamba_pose_backend_type = try_declare_alias.template operator()<std::string>(
+      "mamba_pose/backend_type", "mamba_pose.backend_type", "dummy");
+  mamba_pose_model_path = try_declare_alias.template operator()<std::string>(
+      "mamba_pose/model_path", "mamba_pose.model_path", "");
+  mamba_pose_onnx_input_name = try_declare_alias.template operator()<std::string>(
+      "mamba_pose/onnx_input_name", "mamba_pose.onnx_input_name", "");
+  mamba_pose_onnx_output_name = try_declare_alias.template operator()<std::string>(
+      "mamba_pose/onnx_output_name", "mamba_pose.onnx_output_name", "");
+  mamba_pose_use_cpu_inference = try_declare_alias.template operator()<bool>(
+      "mamba_pose/use_cpu_inference", "mamba_pose.use_cpu_inference", true);
+  mamba_pose_max_rotation_correction_rad = try_declare_alias.template operator()<double>(
+      "mamba_pose/max_rotation_correction_rad", "mamba_pose.max_rotation_correction_rad", 0.10);
+  mamba_pose_max_translation_correction_m = try_declare_alias.template operator()<double>(
+      "mamba_pose/max_translation_correction_m", "mamba_pose.max_translation_correction_m", 0.20);
+  mamba_pose_reject_non_finite_output = try_declare_alias.template operator()<bool>(
+      "mamba_pose/reject_non_finite_output", "mamba_pose.reject_non_finite_output", true);
+  mamba_pose_reject_oversized_output = try_declare_alias.template operator()<bool>(
+      "mamba_pose/reject_oversized_output", "mamba_pose.reject_oversized_output", false);
+  mamba_pose_export_train_data_en =
+      try_declare_alias.template operator()<bool>("mamba_pose/export_train_data_en", "mamba_pose.export_train_data_en", false);
+  mamba_pose_export_train_data_path = try_declare_alias.template operator()<std::string>(
+      "mamba_pose/export_train_data_path", "mamba_pose.export_train_data_path",
+      std::string(ROOT_DIR) + "Log/mamba_pose_train_data.csv");
 
   // get parameter
   this->node->get_parameter("common.lid_topic", lid_topic);
@@ -181,6 +240,12 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("publish.pub_scan_num", pub_scan_num);
   this->node->get_parameter("publish.pub_effect_point_en", pub_effect_point_en);
   this->node->get_parameter("publish.dense_map_en", dense_map_en);
+  pose_compensator_.configure(
+      mamba_pose_enabled, mamba_pose_history_len, mamba_pose_min_ready_frames, mamba_pose_debug_log_en,
+      mamba_pose_backend_type, mamba_pose_model_path,
+      mamba_pose_onnx_input_name, mamba_pose_onnx_output_name, mamba_pose_use_cpu_inference,
+      mamba_pose_max_rotation_correction_rad, mamba_pose_max_translation_correction_m,
+      mamba_pose_reject_non_finite_output, mamba_pose_reject_oversized_output);
 
   p_pre->blind_sqr = p_pre->blind * p_pre->blind;
 }
@@ -410,6 +475,206 @@ void LIVMapper::handleVIO()
             << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << " " << feats_undistort->points.size() << std::endl;
 }
 
+void LIVMapper::initializeMambaPoseTrainDataExporter()
+{
+  if (!mamba_pose_export_train_data_en) return;
+
+  if (mamba_pose_export_train_data_path.empty())
+  {
+    mamba_pose_export_train_data_path = std::string(ROOT_DIR) + "Log/mamba_pose_train_data.csv";
+  }
+
+  try
+  {
+    std::filesystem::path export_path(mamba_pose_export_train_data_path);
+    if (export_path.has_parent_path())
+    {
+      std::filesystem::create_directories(export_path.parent_path());
+    }
+
+    mamba_pose_train_data_header_written =
+        std::filesystem::exists(export_path) && std::filesystem::file_size(export_path) > 0;
+    fout_mamba_pose_train_data.open(mamba_pose_export_train_data_path, std::ios::out | std::ios::app);
+    if (!fout_mamba_pose_train_data.is_open())
+    {
+      RCLCPP_ERROR(this->node->get_logger(), "[MambaPose] Failed to open train data file: %s",
+                   mamba_pose_export_train_data_path.c_str());
+      mamba_pose_export_train_data_en = false;
+      return;
+    }
+
+    if (!mamba_pose_train_data_header_written)
+    {
+      writeMambaPoseTrainDataHeader();
+    }
+  }
+  catch (const std::exception &e)
+  {
+    RCLCPP_ERROR(this->node->get_logger(), "[MambaPose] Failed to initialize train data exporter: %s", e.what());
+    mamba_pose_export_train_data_en = false;
+  }
+}
+
+void LIVMapper::writeMambaPoseTrainDataHeader()
+{
+  if (!fout_mamba_pose_train_data.is_open()) return;
+
+  fout_mamba_pose_train_data
+      << "timestamp,"
+      << "pos_x,pos_y,pos_z,"
+      << "rot_x,rot_y,rot_z,rot_w,"
+      << "vel_x,vel_y,vel_z,"
+      << "bias_g_x,bias_g_y,bias_g_z,"
+      << "bias_a_x,bias_a_y,bias_a_z,"
+      << "effective_feature_num,avg_residual,history_size,ready_flag,"
+      << "gt_pos_x,gt_pos_y,gt_pos_z,"
+      << "gt_rot_x,gt_rot_y,gt_rot_z,gt_rot_w\n";
+  fout_mamba_pose_train_data.flush();
+  mamba_pose_train_data_header_written = true;
+}
+
+double LIVMapper::computeLioAverageResidual() const
+{
+  if (!voxelmap_manager || voxelmap_manager->ptpl_list_.empty()) return -1.0;
+
+  double residual_sum = 0.0;
+  for (const auto &ptpl : voxelmap_manager->ptpl_list_)
+  {
+    residual_sum += std::fabs(ptpl.dis_to_plane_);
+  }
+  return residual_sum / static_cast<double>(voxelmap_manager->ptpl_list_.size());
+}
+
+void LIVMapper::exportMambaPoseTrainData(double timestamp, int effective_feature_num, double avg_residual)
+{
+  if (!mamba_pose_export_train_data_en || !fout_mamba_pose_train_data.is_open()) return;
+
+  Eigen::Quaterniond q(_state.rot_end);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  fout_mamba_pose_train_data << std::fixed << std::setprecision(15)
+      << timestamp << ","
+      << _state.pos_end[0] << "," << _state.pos_end[1] << "," << _state.pos_end[2] << ","
+      << q.x() << "," << q.y() << "," << q.z() << "," << q.w() << ","
+      << _state.vel_end[0] << "," << _state.vel_end[1] << "," << _state.vel_end[2] << ","
+      << _state.bias_g[0] << "," << _state.bias_g[1] << "," << _state.bias_g[2] << ","
+      << _state.bias_a[0] << "," << _state.bias_a[1] << "," << _state.bias_a[2] << ","
+      << effective_feature_num << "," << avg_residual << ","
+      << pose_compensator_.historySize() << "," << (pose_compensator_.isReady() ? 1 : 0) << ","
+      << nan << "," << nan << "," << nan << ","
+      << nan << "," << nan << "," << nan << "," << nan << "\n";
+}
+
+bool LIVMapper::applyPoseCompensationIfNeeded(double timestamp, int effective_feature_num, double avg_residual)
+{
+  if (!mamba_pose_enabled) return false;
+
+  pose_compensator_.pushState(timestamp, _state, effective_feature_num, avg_residual);
+  const bool ready = pose_compensator_.isReady();
+  bool compensation_executed = false;
+  if (ready)
+  {
+    const StatesGroup compensated_state = pose_compensator_.compensate(_state);
+    _state = compensated_state;
+    voxelmap_manager->state_ = _state;
+    compensation_executed = true;
+  }
+
+  if (mamba_pose_debug_log_en)
+  {
+    const auto correction_to_string = [](const PoseCompensator::PoseCorrection &correction)
+    {
+      std::ostringstream oss;
+      oss << "[" << correction[0] << ", " << correction[1] << ", " << correction[2]
+          << ", " << correction[3] << ", " << correction[4] << ", " << correction[5] << "]";
+      return oss.str();
+    };
+    const std::string backend_type = pose_compensator_.backendType();
+    const std::string backend_name = pose_compensator_.backendName();
+    const std::string model_path = pose_compensator_.modelPath();
+    const std::string backend_status = pose_compensator_.backendStatusMessage();
+    const std::string fallback_reason = pose_compensator_.backendFallbackReason();
+    const std::string inference_status = pose_compensator_.lastInferenceStatus();
+    const auto raw_correction_values = pose_compensator_.lastRawCorrection();
+    const auto safe_correction_values = pose_compensator_.lastSafeCorrection();
+    const std::string raw_correction = correction_to_string(raw_correction_values);
+    const std::string safe_correction = correction_to_string(safe_correction_values);
+    const std::string reject_reason = pose_compensator_.lastRejectReason();
+    const bool inference_success = pose_compensator_.lastInferenceSuccess();
+    const bool identity_correction = std::all_of(
+        safe_correction_values.begin(), safe_correction_values.end(),
+        [](const double value) { return value == 0.0; });
+    if ((backend_type == "onnx_placeholder" || backend_type == "onnx") && model_path.empty())
+    {
+      RCLCPP_INFO_THROTTLE(
+        this->node->get_logger(), *this->node->get_clock(), 3000,
+        "[MambaPose] %s backend is active with an empty model_path; using safe zero-correction behavior.",
+        backend_type.c_str());
+    }
+    if (backend_type == "onnx" && (!pose_compensator_.backendLoaded() || !inference_success))
+    {
+      RCLCPP_WARN_THROTTLE(
+        this->node->get_logger(), *this->node->get_clock(), 3000,
+        "[MambaPose] requested_backend=onnx active_backend=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s backend_status=%s inference_status=%s fallback=%s fallback_reason=%s",
+        backend_name.c_str(),
+        pose_compensator_.backendLoaded() ? "true" : "false",
+        pose_compensator_.backendSessionReady() ? "true" : "false",
+        pose_compensator_.backendIoNameReady() ? "true" : "false",
+        inference_success ? "true" : "false",
+        backend_status.c_str(), inference_status.c_str(),
+        pose_compensator_.backendFallbackActive() ? "true" : "false",
+        fallback_reason.c_str());
+    }
+    RCLCPP_INFO_THROTTLE(
+      this->node->get_logger(), *this->node->get_clock(), 1000,
+      "[MambaPose] timestamp=%.6f history=%zu/%d ready=%s executed=%s identity=%s requested_backend=%s active_backend=%s model_path=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s fallback=%s fallback_reason=%s backend_status=%s inference_status=%s seq_len=%zu feature_dim=%zu flat_input_len=%zu output_dim=%zu clamped=%s rejected=%s reject_reason=%s raw=%s safe=%s effective_features=%d avg_residual=%.6f",
+      timestamp, pose_compensator_.historySize(), pose_compensator_.historyLen(),
+      ready ? "true" : "false", compensation_executed ? "true" : "false",
+      identity_correction ? "true" : "false", backend_type.c_str(), backend_name.c_str(),
+      model_path.empty() ? "<empty>" : model_path.c_str(),
+      pose_compensator_.backendLoaded() ? "true" : "false",
+      pose_compensator_.backendSessionReady() ? "true" : "false",
+      pose_compensator_.backendIoNameReady() ? "true" : "false",
+      inference_success ? "true" : "false",
+      pose_compensator_.backendFallbackActive() ? "true" : "false",
+      fallback_reason.c_str(), backend_status.c_str(), inference_status.c_str(),
+      pose_compensator_.lastSequenceLength(),
+      pose_compensator_.lastFeatureDimension(), pose_compensator_.lastFlatInputLength(),
+      pose_compensator_.lastCorrectionDimension(),
+      pose_compensator_.lastCorrectionClamped() ? "true" : "false",
+      pose_compensator_.lastCorrectionRejected() ? "true" : "false",
+      reject_reason.c_str(), raw_correction.c_str(), safe_correction.c_str(),
+      effective_feature_num, avg_residual);
+  }
+
+  return false;
+}
+
+void LIVMapper::rebuildLioDerivedDataAfterCompensation()
+{
+  transformLidar(_state.rot_end, _state.pos_end, feats_down_body, feats_down_world);
+  voxelmap_manager->feats_down_world_ = feats_down_world;
+
+  for (size_t i = 0; i < feats_down_world->points.size(); i++)
+  {
+    voxelmap_manager->pv_list_[i].point_w << feats_down_world->points[i].x, feats_down_world->points[i].y, feats_down_world->points[i].z;
+    M3D point_crossmat = voxelmap_manager->cross_mat_list_[i];
+    M3D var = voxelmap_manager->body_cov_list_[i];
+    var = (_state.rot_end * extR) * var * (_state.rot_end * extR).transpose() +
+          (-point_crossmat) * _state.cov.block<3, 3>(0, 0) * (-point_crossmat).transpose() + _state.cov.block<3, 3>(3, 3);
+    voxelmap_manager->pv_list_[i].var = var;
+  }
+  _pv_list = voxelmap_manager->pv_list_;
+
+  PointCloudXYZI::Ptr laserCloudFullRes(dense_map_en ? feats_undistort : feats_down_body);
+  int size = laserCloudFullRes->points.size();
+  PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+  for (int i = 0; i < size; i++)
+  {
+    RGBpointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i]);
+  }
+  *pcl_w_wait_pub = *laserCloudWorld;
+}
+
 void LIVMapper::handleLIO() 
 {    
   euler_cur = RotMtoEuler(_state.rot_end);
@@ -447,6 +712,15 @@ void LIVMapper::handleLIO()
   voxelmap_manager->StateEstimation(state_propagat);
   _state = voxelmap_manager->state_;
   _pv_list = voxelmap_manager->pv_list_;
+  const double lio_timestamp = LidarMeasures.last_lio_update_time;
+  const int effective_feature_num = voxelmap_manager->effct_feat_num_;
+  const double avg_residual = computeLioAverageResidual();
+  if (mamba_pose_enabled)
+  {
+    const bool pose_compensated = applyPoseCompensationIfNeeded(lio_timestamp, effective_feature_num, avg_residual);
+    (void)pose_compensated;
+  }
+  exportMambaPoseTrainData(lio_timestamp, effective_feature_num, avg_residual);
 
   double t2 = omp_get_wtime();
 
@@ -487,20 +761,9 @@ void LIVMapper::handleLIO()
 
   double t3 = omp_get_wtime();
 
-  PointCloudXYZI::Ptr world_lidar(new PointCloudXYZI());
-  transformLidar(_state.rot_end, _state.pos_end, feats_down_body, world_lidar);
-  for (size_t i = 0; i < world_lidar->points.size(); i++) 
-  {
-    voxelmap_manager->pv_list_[i].point_w << world_lidar->points[i].x, world_lidar->points[i].y, world_lidar->points[i].z;
-    M3D point_crossmat = voxelmap_manager->cross_mat_list_[i];
-    M3D var = voxelmap_manager->body_cov_list_[i];
-    var = (_state.rot_end * extR) * var * (_state.rot_end * extR).transpose() +
-          (-point_crossmat) * _state.cov.block<3, 3>(0, 0) * (-point_crossmat).transpose() + _state.cov.block<3, 3>(3, 3);
-    voxelmap_manager->pv_list_[i].var = var;
-  }
+  rebuildLioDerivedDataAfterCompensation();
   voxelmap_manager->UpdateVoxelMap(voxelmap_manager->pv_list_);
   std::cout << "[ LIO ] Update Voxel Map" << std::endl;
-  _pv_list = voxelmap_manager->pv_list_;
   
   double t4 = omp_get_wtime();
 
@@ -509,16 +772,6 @@ void LIVMapper::handleLIO()
     voxelmap_manager->mapSliding();
   }
   
-  PointCloudXYZI::Ptr laserCloudFullRes(dense_map_en ? feats_undistort : feats_down_body);
-  int size = laserCloudFullRes->points.size();
-  PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
-
-  for (int i = 0; i < size; i++) 
-  {
-    RGBpointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i]);
-  }
-  *pcl_w_wait_pub = *laserCloudWorld;
-
   if (!img_en) publish_frame_world(pubLaserCloudFullRes, vio_manager);
   if (pub_effect_point_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_);
   if (voxelmap_manager->config_setting_.is_pub_plane_map_) voxelmap_manager->pubVoxelMap();

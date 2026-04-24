@@ -101,6 +101,31 @@ find_package(OpenCV REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread)
 
+option(ENABLE_ONNXRUNTIME "Enable optional ONNX Runtime backend for pose compensation" ON)
+set(ONNXRUNTIME_ROOT "" CACHE PATH "Optional ONNX Runtime installation root")
+if(ENABLE_ONNXRUNTIME)
+  find_path(ONNXRUNTIME_INCLUDE_DIR
+    NAMES onnxruntime_cxx_api.h
+    HINTS ${ONNXRUNTIME_ROOT} ENV ONNXRUNTIME_ROOT
+    PATH_SUFFIXES include include/onnxruntime/core/session
+  )
+  find_library(ONNXRUNTIME_LIBRARY
+    NAMES onnxruntime
+    HINTS ${ONNXRUNTIME_ROOT} ENV ONNXRUNTIME_ROOT
+    PATH_SUFFIXES lib lib64
+  )
+  if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+    message(STATUS "ONNX Runtime found: ${ONNXRUNTIME_LIBRARY}")
+    set(ONNXRUNTIME_AVAILABLE TRUE)
+  else()
+    message(STATUS "ONNX Runtime not found, building pose compensator without real ONNX backend")
+    set(ONNXRUNTIME_AVAILABLE FALSE)
+  endif()
+else()
+  message(STATUS "ONNX Runtime support disabled by CMake option")
+  set(ONNXRUNTIME_AVAILABLE FALSE)
+endif()
+
 # Include directories for dependencies
 include_directories(
   ${EIGEN3_INCLUDE_DIR}
@@ -141,6 +166,7 @@ add_library(vio src/vio.cpp src/frame.cpp src/visual_point.cpp)
 add_library(lio src/voxel_map.cpp)
 add_library(pre src/preprocess.cpp)
 add_library(imu_proc src/IMU_Processing.cpp)
+add_library(pose_compensator src/pose_compensator.cpp)
 add_library(laser_mapping src/LIVMapper.cpp)
 add_library(utils src/utils.cpp)
 
@@ -148,18 +174,26 @@ ament_target_dependencies(vio ${dependencies} )
 ament_target_dependencies(lio ${dependencies})
 ament_target_dependencies(pre ${dependencies})
 ament_target_dependencies(imu_proc ${dependencies})
+ament_target_dependencies(pose_compensator ${dependencies})
 ament_target_dependencies(laser_mapping ${dependencies})
 
 # linking libraries or executables to public dependencies
 target_link_libraries(laser_mapping 
     ${CMAKE_SOURCE_DIR}/../../install/vikit_common/lib/libvikit_common.so 
     ${CMAKE_SOURCE_DIR}/../../install/vikit_ros/lib/libvikit_ros.so
+    pose_compensator
     ${COMMON_DEPENDENCIES}
 )
 target_link_libraries(vio ${COMMON_DEPENDENCIES})
 target_link_libraries(lio utils ${COMMON_DEPENDENCIES})
 target_link_libraries(pre ${COMMON_DEPENDENCIES})
 target_link_libraries(imu_proc ${COMMON_DEPENDENCIES})
+target_link_libraries(pose_compensator ${COMMON_DEPENDENCIES})
+if(ONNXRUNTIME_AVAILABLE)
+  target_include_directories(pose_compensator PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+  target_compile_definitions(pose_compensator PRIVATE HAVE_ONNXRUNTIME=1)
+  target_link_libraries(pose_compensator PUBLIC ${ONNXRUNTIME_LIBRARY})
+endif()
 
 # Add the main executable
 add_executable(fastlivo_mapping src/main.cpp)

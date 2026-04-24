@@ -1,1 +1,5 @@
 Log/*
+build/
+install/
+log/
+.codex/

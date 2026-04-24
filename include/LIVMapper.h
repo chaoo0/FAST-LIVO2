@@ -14,6 +14,7 @@ which is included as part of this source code package.
 #define LIV_MAPPER_H
 
 #include "IMU_Processing.h"
+#include "pose_compensator.h"
 #include "vio.h"
 #include "preprocess.h"
 #ifdef PRE_ROS_IRON
@@ -26,6 +27,7 @@ which is included as part of this source code package.
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <vikit/camera_loader.h>
+#include <string>
 
 class LIVMapper
 {
@@ -41,6 +43,12 @@ public:
   void stateEstimationAndMapping();
   void handleVIO();
   void handleLIO();
+  bool applyPoseCompensationIfNeeded(double timestamp, int effective_feature_num, double avg_residual);
+  void rebuildLioDerivedDataAfterCompensation();
+  void initializeMambaPoseTrainDataExporter();
+  void writeMambaPoseTrainDataHeader();
+  void exportMambaPoseTrainData(double timestamp, int effective_feature_num, double avg_residual);
+  double computeLioAverageResidual() const;
   void savePCD();
   void processImu();
   
@@ -76,6 +84,11 @@ public:
   
   string root_dir;
   string lid_topic, imu_topic, seq_name, img_topic;
+  std::string mamba_pose_export_train_data_path;
+  std::string mamba_pose_backend_type = "dummy";
+  std::string mamba_pose_model_path;
+  std::string mamba_pose_onnx_input_name;
+  std::string mamba_pose_onnx_output_name;
   V3D extT;
   M3D extR;
 
@@ -89,6 +102,8 @@ public:
   double filter_size_pcd = 0;
   double _first_lidar_time = 0.0;
   double match_time = 0, solve_time = 0, solve_const_H_time = 0;
+  double mamba_pose_max_rotation_correction_rad = 0.10;
+  double mamba_pose_max_translation_correction_m = 0.20;
 
   bool lidar_map_inited = false, pcd_save_en = false, pub_effect_point_en = false, pose_output_en = false, ros_driver_fix_en = false;
   int pcd_save_interval = -1, pcd_index = 0;
@@ -110,7 +125,16 @@ public:
 
   bool lidar_pushed = false, imu_en, gravity_est_en, flg_reset = false, ba_bg_est_en = true;
   bool dense_map_en = false;
+  bool mamba_pose_enabled = false;
+  bool mamba_pose_debug_log_en = false;
+  bool mamba_pose_export_train_data_en = false;
+  bool mamba_pose_train_data_header_written = false;
+  bool mamba_pose_reject_non_finite_output = true;
+  bool mamba_pose_reject_oversized_output = false;
+  bool mamba_pose_use_cpu_inference = true;
   int img_en = 1, imu_int_frame = 3;
+  int mamba_pose_history_len = 10;
+  int mamba_pose_min_ready_frames = 3;
   bool normal_en = true;
   bool exposure_estimate_en = false;
   double exposure_time_init = 0.0;
@@ -144,7 +168,7 @@ public:
   PointCloudXYZRGB::Ptr pcl_wait_save;
   PointCloudXYZI::Ptr pcl_wait_save_intensity;
 
-  ofstream fout_pre, fout_out, fout_pcd_pos, fout_points;
+  ofstream fout_pre, fout_out, fout_pcd_pos, fout_points, fout_mamba_pose_train_data;
 
   pcl::VoxelGrid<PointType> downSizeFilterSurf;
 
@@ -161,6 +185,7 @@ public:
 
   PreprocessPtr p_pre;
   ImuProcessPtr p_imu;
+  PoseCompensator pose_compensator_;
   VoxelMapManagerPtr voxelmap_manager;
   VIOManagerPtr vio_manager;
 
