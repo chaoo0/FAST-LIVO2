@@ -18,6 +18,7 @@ def generate_launch_description():
     #这里我们修改加载的雷达参数配置文件：mid360.yaml
     avia_config_cmd = os.path.join(config_file_dir, "mid360.yaml")
     camera_config_cmd = os.path.join(config_file_dir, "camera_pinhole.yaml")
+    mamba_pose_config_cmd = os.path.join(config_file_dir, "mamba_pose_onnx_normal_test.yaml")
 
     # 打开 use_rviz
     use_rviz_arg = DeclareLaunchArgument(
@@ -38,6 +39,12 @@ def generate_launch_description():
         description='Full path to the ROS2 parameters file to use for vikit_ros nodes',
     )
 
+    mamba_pose_config_arg = DeclareLaunchArgument(
+        'mamba_pose_params_file',
+        default_value=mamba_pose_config_cmd,
+        description='Full path to the ROS2 parameters file to use for mamba pose test settings',
+    )
+
     use_respawn_arg = DeclareLaunchArgument(
         'use_respawn', 
         default_value='True',
@@ -45,12 +52,14 @@ def generate_launch_description():
 
     avia_params_file = LaunchConfiguration('avia_params_file')
     camera_params_file = LaunchConfiguration('camera_params_file')
+    mamba_pose_params_file = LaunchConfiguration('mamba_pose_params_file')
     use_respawn = LaunchConfiguration('use_respawn')
 
     return LaunchDescription([
         use_rviz_arg,
         avia_config_arg,
         camera_config_arg,
+        mamba_pose_config_arg,
         use_respawn_arg,
 
         Node(
@@ -78,6 +87,7 @@ def generate_launch_description():
             parameters=[
                 avia_params_file,
                 camera_params_file,
+                mamba_pose_params_file,
             ],
             output="screen"
         ),
@@ -91,5 +101,4 @@ def generate_launch_description():
             output="screen"
         ),
     ])
-
 
