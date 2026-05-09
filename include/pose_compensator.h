@@ -49,6 +49,7 @@ public:
     virtual bool isSessionReady() const { return false; }
     virtual bool isIoNameReady() const { return false; }
     virtual std::string statusMessage() const { return "ready"; }
+    virtual std::string errorMessage() const { return "none"; }
     virtual bool lastInferenceSuccess() const { return false; }
     virtual std::string lastInferenceStatus() const { return "not_run"; }
   };
@@ -94,6 +95,7 @@ public:
     bool isSessionReady() const override;
     bool isIoNameReady() const override;
     std::string statusMessage() const override;
+    std::string errorMessage() const override;
     bool lastInferenceSuccess() const override;
     std::string lastInferenceStatus() const override;
 
@@ -110,6 +112,7 @@ public:
     std::string status_message_ = "not_initialized";
     mutable bool last_inference_success_ = false;
     mutable std::string last_inference_status_ = "not_run";
+    mutable std::string last_error_message_ = "none";
   };
 
   PoseCompensator();
@@ -142,6 +145,7 @@ public:
   bool backendFallbackActive() const;
   std::string backendFallbackReason() const;
   std::string backendStatusMessage() const;
+  std::string backendErrorMessage() const;
   bool lastInferenceSuccess() const;
   std::string lastInferenceStatus() const;
   bool lastCorrectionClamped() const;
@@ -183,6 +187,7 @@ private:
   bool backend_fallback_active_ = false;
   std::string backend_fallback_reason_ = "none";
   std::string backend_status_message_ = "not_initialized";
+  std::string backend_error_message_ = "none";
   mutable size_t last_sequence_length_ = 0;
   mutable size_t last_feature_dimension_ = 0;
   mutable size_t last_flat_input_length_ = 0;

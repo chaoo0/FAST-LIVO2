@@ -18,11 +18,13 @@ def generate_launch_description():
     #Load parameters
     avia_config_cmd = os.path.join(config_file_dir, "avia.yaml")
     camera_config_cmd = os.path.join(config_file_dir, "camera_pinhole_avia.yaml")
+    mamba_pose_config_cmd = os.path.join(config_file_dir, "mamba_pose_onnx_normal_test.yaml")
 
     # Param use_rviz
     use_rviz_arg = DeclareLaunchArgument(
         "use_rviz",
-        default_value="False",
+        default_value="True",
+        #default_value="False",
         description="Whether to launch Rviz2",
     )
 
@@ -38,6 +40,12 @@ def generate_launch_description():
         description='Full path to the ROS2 parameters file to use for vikit_ros nodes',
     )
 
+    mamba_pose_config_arg = DeclareLaunchArgument(
+        'mamba_pose_params_file',
+        default_value=mamba_pose_config_cmd,
+        description='Full path to the ROS2 parameters file to use for mamba pose test settings',
+    )
+
     # https://github.com/ros-navigation/navigation2/blob/1c68c212db01f9f75fcb8263a0fbb5dfa711bdea/nav2_bringup/launch/navigation_launch.py#L40
     use_respawn_arg = DeclareLaunchArgument(
         'use_respawn', 
@@ -46,12 +54,14 @@ def generate_launch_description():
 
     avia_params_file = LaunchConfiguration('avia_params_file')
     camera_params_file = LaunchConfiguration('camera_params_file')
+    mamba_pose_params_file = LaunchConfiguration('mamba_pose_params_file')
     use_respawn = LaunchConfiguration('use_respawn')
 
     return LaunchDescription([
         use_rviz_arg,
         avia_config_arg,
         camera_config_arg,
+        mamba_pose_config_arg,
         use_respawn_arg,
 
         # play ros2 bag
@@ -86,6 +96,7 @@ def generate_launch_description():
             parameters=[
                 avia_params_file,
                 camera_params_file,
+                mamba_pose_params_file,
             ],
             # https://docs.ros.org/en/humble/How-To-Guides/Getting-Backtraces-in-ROS-2.html
             prefix=[

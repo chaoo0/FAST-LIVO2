@@ -592,6 +592,7 @@ bool LIVMapper::applyPoseCompensationIfNeeded(double timestamp, int effective_fe
     const std::string backend_name = pose_compensator_.backendName();
     const std::string model_path = pose_compensator_.modelPath();
     const std::string backend_status = pose_compensator_.backendStatusMessage();
+    const std::string backend_error = pose_compensator_.backendErrorMessage();
     const std::string fallback_reason = pose_compensator_.backendFallbackReason();
     const std::string inference_status = pose_compensator_.lastInferenceStatus();
     const auto raw_correction_values = pose_compensator_.lastRawCorrection();
@@ -614,19 +615,19 @@ bool LIVMapper::applyPoseCompensationIfNeeded(double timestamp, int effective_fe
     {
       RCLCPP_WARN_THROTTLE(
         this->node->get_logger(), *this->node->get_clock(), 3000,
-        "[MambaPose] requested_backend=onnx active_backend=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s backend_status=%s inference_status=%s fallback=%s fallback_reason=%s",
+        "[MambaPose] requested_backend=onnx active_backend=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s backend_status=%s backend_error=%s inference_status=%s fallback=%s fallback_reason=%s",
         backend_name.c_str(),
         pose_compensator_.backendLoaded() ? "true" : "false",
         pose_compensator_.backendSessionReady() ? "true" : "false",
         pose_compensator_.backendIoNameReady() ? "true" : "false",
         inference_success ? "true" : "false",
-        backend_status.c_str(), inference_status.c_str(),
+        backend_status.c_str(), backend_error.c_str(), inference_status.c_str(),
         pose_compensator_.backendFallbackActive() ? "true" : "false",
         fallback_reason.c_str());
     }
     RCLCPP_INFO_THROTTLE(
       this->node->get_logger(), *this->node->get_clock(), 1000,
-      "[MambaPose] timestamp=%.6f history=%zu/%d ready=%s executed=%s identity=%s requested_backend=%s active_backend=%s model_path=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s fallback=%s fallback_reason=%s backend_status=%s inference_status=%s seq_len=%zu feature_dim=%zu flat_input_len=%zu output_dim=%zu clamped=%s rejected=%s reject_reason=%s raw=%s safe=%s effective_features=%d avg_residual=%.6f",
+      "[MambaPose] timestamp=%.6f history=%zu/%d ready=%s executed=%s identity=%s requested_backend=%s active_backend=%s model_path=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s fallback=%s fallback_reason=%s backend_status=%s backend_error=%s inference_status=%s seq_len=%zu feature_dim=%zu flat_input_len=%zu output_dim=%zu clamped=%s rejected=%s reject_reason=%s raw=%s safe=%s effective_features=%d avg_residual=%.6f",
       timestamp, pose_compensator_.historySize(), pose_compensator_.historyLen(),
       ready ? "true" : "false", compensation_executed ? "true" : "false",
       identity_correction ? "true" : "false", backend_type.c_str(), backend_name.c_str(),
@@ -636,7 +637,7 @@ bool LIVMapper::applyPoseCompensationIfNeeded(double timestamp, int effective_fe
       pose_compensator_.backendIoNameReady() ? "true" : "false",
       inference_success ? "true" : "false",
       pose_compensator_.backendFallbackActive() ? "true" : "false",
-      fallback_reason.c_str(), backend_status.c_str(), inference_status.c_str(),
+      fallback_reason.c_str(), backend_status.c_str(), backend_error.c_str(), inference_status.c_str(),
       pose_compensator_.lastSequenceLength(),
       pose_compensator_.lastFeatureDimension(), pose_compensator_.lastFlatInputLength(),
       pose_compensator_.lastCorrectionDimension(),

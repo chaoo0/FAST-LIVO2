@@ -12,6 +12,10 @@
 namespace
 {
 using TensorElementType = ONNXTensorElementDataType;
+constexpr size_t kExpectedInputRank = 2;
+constexpr size_t kExpectedOutputRank = 1;
+constexpr int64_t kExpectedFeatureDim = 18;
+constexpr int64_t kExpectedOutputDim = 6;
 
 bool matchesInputDim(const int64_t model_dim, const int64_t actual_dim)
 {
@@ -21,6 +25,37 @@ bool matchesInputDim(const int64_t model_dim, const int64_t actual_dim)
 bool isSupportedElementType(const TensorElementType type)
 {
   return type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+}
+
+std::string tensorElementTypeToString(const TensorElementType type)
+{
+  switch (type)
+  {
+  case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+    return "float";
+  case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+    return "double";
+  case ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED:
+    return "undefined";
+  default:
+    return std::to_string(static_cast<int>(type));
+  }
+}
+
+std::string shapeToString(const std::vector<int64_t> &shape)
+{
+  std::ostringstream oss;
+  oss << "[";
+  for (size_t i = 0; i < shape.size(); ++i)
+  {
+    if (i > 0)
+    {
+      oss << ", ";
+    }
+    oss << shape[i];
+  }
+  oss << "]";
+  return oss.str();
 }
 
 int findInputIndexByName(const Ort::Session &session, const std::string &target_name)
@@ -56,31 +91,42 @@ int findOutputIndexByName(const Ort::Session &session, const std::string &target
 bool validateModelInputShape(const std::vector<int64_t> &model_shape, const int64_t sequence_length,
                              const int64_t feature_dim)
 {
-  if (model_shape.size() != 2)
+  if (model_shape.size() != kExpectedInputRank)
   {
     return false;
   }
   return matchesInputDim(model_shape[0], sequence_length) && matchesInputDim(model_shape[1], feature_dim);
 }
 
-bool shapeHasKnownPositiveExtent(const std::vector<int64_t> &shape)
+template <typename TensorShapeInfoT>
+bool readExpectedRankShape(const TensorShapeInfoT &tensor_info, const size_t expected_rank,
+                           const std::string &tensor_label, std::vector<int64_t> &shape, std::string &error)
 {
-  return std::all_of(shape.begin(), shape.end(), [](const int64_t dim) { return dim > 0; });
+  const size_t actual_rank = tensor_info.GetDimensionsCount();
+  if (actual_rank != expected_rank)
+  {
+    std::ostringstream oss;
+    oss << "expected " << tensor_label << " rank " << expected_rank << ", got " << actual_rank;
+    error = oss.str();
+    return false;
+  }
+
+  shape.assign(expected_rank, 0);
+  if (!shape.empty())
+  {
+    Ort::ThrowOnError(Ort::GetApi().GetDimensions(tensor_info, shape.data(), shape.size()));
+  }
+  error = "none";
+  return true;
 }
 
-size_t shapeElementCount(const std::vector<int64_t> &shape)
+std::string inputShapeMismatchMessage(const std::vector<int64_t> &model_shape, const int64_t sequence_length,
+                                      const int64_t feature_dim)
 {
-  if (!shapeHasKnownPositiveExtent(shape))
-  {
-    return 0;
-  }
-
-  size_t count = 1;
-  for (const int64_t dim : shape)
-  {
-    count *= static_cast<size_t>(dim);
-  }
-  return count;
+  std::ostringstream oss;
+  oss << "model input shape " << shapeToString(model_shape)
+      << " is incompatible with runtime shape [" << sequence_length << ", " << feature_dim << "]";
+  return oss.str();
 }
 } // namespace
 #endif
@@ -88,8 +134,8 @@ size_t shapeElementCount(const std::vector<int64_t> &shape)
 #ifdef HAVE_ONNXRUNTIME
 struct PoseCompensator::OnnxInferenceBackend::Impl
 {
-  Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "fast_livo_pose_comp"};
-  Ort::SessionOptions session_options;
+  std::unique_ptr<Ort::Env> env;
+  std::unique_ptr<Ort::SessionOptions> session_options;
   std::unique_ptr<Ort::Session> session;
   TensorElementType input_element_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
   TensorElementType output_element_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
@@ -181,154 +227,328 @@ PoseCompensator::OnnxInferenceBackend::OnnxInferenceBackend(
   if (model_path_.empty())
   {
     status_message_ = "model_path_empty";
+    last_error_message_ = "model_path is empty";
     return;
   }
   if (!std::filesystem::exists(model_path_))
   {
     status_message_ = "model_file_not_found";
+    last_error_message_ = "model file not found: " + model_path_;
+    return;
+  }
+
+  auto fail_with_message = [this](const std::string &status, const std::string &message) {
+    model_loaded_ = false;
+    status_message_ = status;
+    last_error_message_ = message.empty() ? "none" : message;
+  };
+
+  auto fail_with_ort_exception = [this, &fail_with_message](const std::string &status, const Ort::Exception &e) {
+    fail_with_message(status, e.what());
+  };
+
+  auto fail_with_std_exception = [this, &fail_with_message](const std::string &status, const std::exception &e) {
+    fail_with_message(status, e.what());
+  };
+
+  auto fail_with_unknown_exception = [this, &fail_with_message](const std::string &status) {
+    fail_with_message(status, "unknown_exception");
+  };
+
+  try
+  {
+    impl_->env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "fast_livo_pose_comp");
+  }
+  catch (const Ort::Exception &e)
+  {
+    fail_with_ort_exception("env_create_failed", e);
+    return;
+  }
+  catch (const std::exception &e)
+  {
+    fail_with_std_exception("env_create_failed", e);
+    return;
+  }
+  catch (...)
+  {
+    fail_with_unknown_exception("env_create_failed");
     return;
   }
 
   try
   {
-    impl_->session_options.SetIntraOpNumThreads(1);
-    impl_->session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_BASIC);
-    impl_->session = std::make_unique<Ort::Session>(impl_->env, model_path_.c_str(), impl_->session_options);
+    impl_->session_options = std::make_unique<Ort::SessionOptions>();
+    impl_->session_options->SetIntraOpNumThreads(1);
+    impl_->session_options->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_BASIC);
+  }
+  catch (const Ort::Exception &e)
+  {
+    fail_with_ort_exception("session_options_create_failed", e);
+    return;
+  }
+  catch (const std::exception &e)
+  {
+    fail_with_std_exception("session_options_create_failed", e);
+    return;
+  }
+  catch (...)
+  {
+    fail_with_unknown_exception("session_options_create_failed");
+    return;
+  }
+
+  try
+  {
+    impl_->session = std::make_unique<Ort::Session>(*impl_->env, model_path_.c_str(), *impl_->session_options);
     session_ready_ = impl_->session != nullptr;
     if (!session_ready_)
     {
-      status_message_ = "session_not_ready";
+      fail_with_message("session_create_failed", "Ort::Session returned nullptr");
       return;
     }
-
-    const size_t input_count = impl_->session->GetInputCount();
-    const size_t output_count = impl_->session->GetOutputCount();
-    if (input_count == 0 || output_count == 0)
-    {
-      status_message_ = "io_count_unsupported";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-
-    Ort::AllocatorWithDefaultOptions allocator;
-    if (input_name_.empty())
-    {
-      if (input_count != 1)
-      {
-        status_message_ = "input_name_unresolved_multiple_inputs";
-        impl_->session.reset();
-        session_ready_ = false;
-        return;
-      }
-      auto input_name = impl_->session->GetInputNameAllocated(0, allocator);
-      input_name_ = input_name ? input_name.get() : "";
-    }
-    else if (findInputIndexByName(*impl_->session, input_name_) < 0)
-    {
-      status_message_ = "input_name_not_found";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-
-    if (output_name_.empty())
-    {
-      if (output_count != 1)
-      {
-        status_message_ = "output_name_unresolved_multiple_outputs";
-        impl_->session.reset();
-        session_ready_ = false;
-        return;
-      }
-      auto output_name = impl_->session->GetOutputNameAllocated(0, allocator);
-      output_name_ = output_name ? output_name.get() : "";
-    }
-    else if (findOutputIndexByName(*impl_->session, output_name_) < 0)
-    {
-      status_message_ = "output_name_not_found";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-
-    if (input_name_.empty() || output_name_.empty())
-    {
-      status_message_ = "onnx_io_name_unresolved";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-
-    const int input_index = findInputIndexByName(*impl_->session, input_name_);
-    const int output_index = findOutputIndexByName(*impl_->session, output_name_);
-    if (input_index < 0)
-    {
-      status_message_ = "input_name_not_found";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-    if (output_index < 0)
-    {
-      status_message_ = "output_name_not_found";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-
-    const auto input_info = impl_->session->GetInputTypeInfo(static_cast<size_t>(input_index)).GetTensorTypeAndShapeInfo();
-    const auto output_info = impl_->session->GetOutputTypeInfo(static_cast<size_t>(output_index)).GetTensorTypeAndShapeInfo();
-    impl_->input_element_type = input_info.GetElementType();
-    impl_->output_element_type = output_info.GetElementType();
-    impl_->input_shape = input_info.GetShape();
-    impl_->output_shape = output_info.GetShape();
-
-    if (!isSupportedElementType(impl_->input_element_type))
-    {
-      status_message_ = "input_type_mismatch";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-    if (!isSupportedElementType(impl_->output_element_type))
-    {
-      status_message_ = "output_type_mismatch";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-    if (impl_->input_shape.size() != 2)
-    {
-      status_message_ = "input_shape_mismatch";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-
-    const size_t static_output_count = shapeElementCount(impl_->output_shape);
-    if (static_output_count != 0 && static_output_count != PoseCorrection{}.size())
-    {
-      status_message_ = "output_shape_mismatch";
-      impl_->session.reset();
-      session_ready_ = false;
-      return;
-    }
-
-    io_name_ready_ = true;
-    model_loaded_ = true;
-    status_message_ = use_cpu_inference_ ? "loaded_cpu" : "loaded_default_provider";
+    status_message_ = "session_ready";
+    last_error_message_ = "none";
   }
-  catch (const std::exception &)
+  catch (const Ort::Exception &e)
   {
-    model_loaded_ = false;
-    session_ready_ = false;
-    io_name_ready_ = false;
-    status_message_ = "onnx_session_init_failed";
-    impl_->session.reset();
+    fail_with_ort_exception("session_create_failed", e);
+    return;
   }
+  catch (const std::exception &e)
+  {
+    fail_with_std_exception("session_create_failed", e);
+    return;
+  }
+  catch (...)
+  {
+    fail_with_unknown_exception("session_create_failed");
+    return;
+  }
+
+  const size_t input_count = impl_->session->GetInputCount();
+  const size_t output_count = impl_->session->GetOutputCount();
+  if (input_count == 0)
+  {
+    fail_with_message("input_count_invalid", "model exposes zero inputs");
+    return;
+  }
+  if (output_count == 0)
+  {
+    fail_with_message("output_count_invalid", "model exposes zero outputs");
+    return;
+  }
+
+  Ort::AllocatorWithDefaultOptions allocator;
+  if (input_name_.empty())
+  {
+    if (input_count != 1)
+    {
+      std::ostringstream oss;
+      oss << "input_name is empty and model exposes " << input_count << " inputs";
+      fail_with_message("input_name_resolve_failed", oss.str());
+      return;
+    }
+    try
+    {
+      auto input_name = impl_->session->GetInputNameAllocated(0, allocator);
+      input_name_ = input_name ? std::string(input_name.get()) : std::string();
+    }
+    catch (const Ort::Exception &e)
+    {
+      fail_with_ort_exception("input_name_resolve_failed", e);
+      return;
+    }
+    catch (const std::exception &e)
+    {
+      fail_with_std_exception("input_name_resolve_failed", e);
+      return;
+    }
+    catch (...)
+    {
+      fail_with_unknown_exception("input_name_resolve_failed");
+      return;
+    }
+  }
+  else if (findInputIndexByName(*impl_->session, input_name_) < 0)
+  {
+    fail_with_message("input_name_resolve_failed", "configured input_name not found: " + input_name_);
+    return;
+  }
+
+  if (input_name_.empty())
+  {
+    fail_with_message("input_name_resolve_failed", "resolved input_name is empty");
+    return;
+  }
+
+  if (output_name_.empty())
+  {
+    if (output_count != 1)
+    {
+      std::ostringstream oss;
+      oss << "output_name is empty and model exposes " << output_count << " outputs";
+      fail_with_message("output_name_resolve_failed", oss.str());
+      return;
+    }
+    try
+    {
+      auto output_name = impl_->session->GetOutputNameAllocated(0, allocator);
+      output_name_ = output_name ? std::string(output_name.get()) : std::string();
+    }
+    catch (const Ort::Exception &e)
+    {
+      fail_with_ort_exception("output_name_resolve_failed", e);
+      return;
+    }
+    catch (const std::exception &e)
+    {
+      fail_with_std_exception("output_name_resolve_failed", e);
+      return;
+    }
+    catch (...)
+    {
+      fail_with_unknown_exception("output_name_resolve_failed");
+      return;
+    }
+  }
+  else if (findOutputIndexByName(*impl_->session, output_name_) < 0)
+  {
+    fail_with_message("output_name_resolve_failed", "configured output_name not found: " + output_name_);
+    return;
+  }
+
+  if (output_name_.empty())
+  {
+    fail_with_message("output_name_resolve_failed", "resolved output_name is empty");
+    return;
+  }
+
+  const int input_index = findInputIndexByName(*impl_->session, input_name_);
+  if (input_index < 0)
+  {
+    fail_with_message("input_name_resolve_failed", "resolved input_name not found in session: " + input_name_);
+    return;
+  }
+
+  const int output_index = findOutputIndexByName(*impl_->session, output_name_);
+  if (output_index < 0)
+  {
+    fail_with_message("output_name_resolve_failed", "resolved output_name not found in session: " + output_name_);
+    return;
+  }
+
+  io_name_ready_ = true;
+  status_message_ = "io_name_ready";
+  last_error_message_ = "none";
+
+  try
+  {
+    Ort::TypeInfo input_type_info = impl_->session->GetInputTypeInfo(static_cast<size_t>(input_index));
+    auto input_tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
+    impl_->input_element_type = input_tensor_info.GetElementType();
+
+    const size_t input_rank = input_tensor_info.GetDimensionsCount();
+    if (input_rank != kExpectedInputRank)
+    {
+      fail_with_message(
+          "input_rank_invalid",
+          "expected input rank " + std::to_string(kExpectedInputRank) + ", got " + std::to_string(input_rank));
+      return;
+    }
+
+    impl_->input_shape = input_tensor_info.GetShape();
+  }
+  catch (const Ort::Exception &e)
+  {
+    fail_with_ort_exception("input_type_shape_read_failed", e);
+    return;
+  }
+  catch (const std::exception &e)
+  {
+    fail_with_std_exception("input_type_shape_read_failed", e);
+    return;
+  }
+  catch (...)
+  {
+    fail_with_unknown_exception("input_type_shape_read_failed");
+    return;
+  }
+
+  if (!isSupportedElementType(impl_->input_element_type))
+  {
+    fail_with_message(
+        "input_type_shape_read_failed",
+        "unsupported input element type: " + tensorElementTypeToString(impl_->input_element_type));
+    return;
+  }
+
+  const int64_t model_seq_dim = impl_->input_shape[0];
+  const int64_t model_feature_dim = impl_->input_shape[1];
+  (void)model_seq_dim;
+  if (model_feature_dim > 0 && model_feature_dim != kExpectedFeatureDim)
+  {
+    fail_with_message(
+        "input_feature_dim_mismatch",
+        "model feature_dim=" + std::to_string(model_feature_dim) +
+            ", expected=" + std::to_string(kExpectedFeatureDim));
+    return;
+  }
+
+  try
+  {
+    Ort::TypeInfo output_type_info = impl_->session->GetOutputTypeInfo(static_cast<size_t>(output_index));
+    auto output_tensor_info = output_type_info.GetTensorTypeAndShapeInfo();
+    impl_->output_element_type = output_tensor_info.GetElementType();
+
+    const size_t output_rank = output_tensor_info.GetDimensionsCount();
+    if (output_rank != kExpectedOutputRank)
+    {
+      fail_with_message(
+          "output_rank_invalid",
+          "expected output rank " + std::to_string(kExpectedOutputRank) + ", got " + std::to_string(output_rank));
+      return;
+    }
+
+    impl_->output_shape = output_tensor_info.GetShape();
+  }
+  catch (const Ort::Exception &e)
+  {
+    fail_with_ort_exception("output_type_shape_read_failed", e);
+    return;
+  }
+  catch (const std::exception &e)
+  {
+    fail_with_std_exception("output_type_shape_read_failed", e);
+    return;
+  }
+  catch (...)
+  {
+    fail_with_unknown_exception("output_type_shape_read_failed");
+    return;
+  }
+
+  if (!isSupportedElementType(impl_->output_element_type))
+  {
+    fail_with_message(
+        "output_type_shape_read_failed",
+        "unsupported output element type: " + tensorElementTypeToString(impl_->output_element_type));
+    return;
+  }
+
+  if (impl_->output_shape[0] > 0 && impl_->output_shape[0] != kExpectedOutputDim)
+  {
+    fail_with_message(
+        "output_dim_mismatch",
+        "model output_dim=" + std::to_string(impl_->output_shape[0]) +
+            ", expected=" + std::to_string(kExpectedOutputDim));
+    return;
+  }
+
+  model_loaded_ = true;
+  last_error_message_ = "none";
 #else
   status_message_ = "onnxruntime_not_compiled";
+  last_error_message_ = "onnxruntime_not_compiled";
   (void)model_path_;
   (void)input_name_;
   (void)output_name_;
@@ -359,17 +579,36 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
     return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   }
 
-  if (input.sequence_length == 0 || input.feature_dim == 0 || input.data.empty() ||
-      input.flat_input_length != input.sequence_length * input.feature_dim ||
-      input.data.size() != input.flat_input_length)
+  last_error_message_ = "none";
+
+  if (input.sequence_length == 0 || input.feature_dim == 0 || input.data.empty())
   {
     last_inference_status_ = "input_shape_mismatch";
+    last_error_message_ = "sequence_length, feature_dim, and input data must all be non-zero";
+    return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  }
+
+  const size_t expected_flat_size = input.sequence_length * input.feature_dim;
+  if (input.flat_input_length != expected_flat_size)
+  {
+    last_inference_status_ = "input_flat_size_mismatch";
+    last_error_message_ = "flat_input_length=" + std::to_string(input.flat_input_length) +
+                          ", expected=" + std::to_string(expected_flat_size);
+    return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  }
+  if (input.data.size() != expected_flat_size)
+  {
+    last_inference_status_ = "input_flat_size_mismatch";
+    last_error_message_ = "input_flat.size()=" + std::to_string(input.data.size()) +
+                          ", expected=" + std::to_string(expected_flat_size);
     return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   }
   if (!validateModelInputShape(
           impl_->input_shape, static_cast<int64_t>(input.sequence_length), static_cast<int64_t>(input.feature_dim)))
   {
     last_inference_status_ = "input_shape_mismatch";
+    last_error_message_ = inputShapeMismatchMessage(
+        impl_->input_shape, static_cast<int64_t>(input.sequence_length), static_cast<int64_t>(input.feature_dim));
     return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   }
 
@@ -380,15 +619,23 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
     // 2. F stays aligned with the current handcrafted feature layout
     // 3. the model outputs exactly 6 values ordered as
     //    [d_roll, d_pitch, d_yaw, d_tx, d_ty, d_tz]
-    const std::array<int64_t, 2> input_shape = {
+    const std::array<int64_t, 2> runtime_input_shape = {
         static_cast<int64_t>(input.sequence_length),
         static_cast<int64_t>(input.feature_dim)};
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     if (impl_->input_element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE)
     {
       std::vector<double> input_tensor_values(input.data.begin(), input.data.end());
+      if (input_tensor_values.size() != expected_flat_size)
+      {
+        last_inference_status_ = "input_flat_size_mismatch";
+        last_error_message_ = "input_flat.size()=" + std::to_string(input_tensor_values.size()) +
+                              ", expected=" + std::to_string(expected_flat_size);
+        return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      }
       Ort::Value input_tensor = Ort::Value::CreateTensor<double>(
-          memory_info, input_tensor_values.data(), input_tensor_values.size(), input_shape.data(), input_shape.size());
+          memory_info, input_tensor_values.data(), input_tensor_values.size(), runtime_input_shape.data(),
+          runtime_input_shape.size());
       const char *input_names[] = {input_name_.c_str()};
       const char *output_names[] = {output_name_.c_str()};
       auto output_tensors = impl_->session->Run(
@@ -400,10 +647,27 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
       }
 
       auto output_info = output_tensors.front().GetTensorTypeAndShapeInfo();
-      const size_t output_count = output_info.GetElementCount();
-      if (output_count != PoseCorrection{}.size())
+      std::vector<int64_t> runtime_output_shape;
+      std::string output_shape_error;
+      if (!readExpectedRankShape(output_info, kExpectedOutputRank, "output", runtime_output_shape, output_shape_error))
       {
         last_inference_status_ = "output_shape_mismatch";
+        last_error_message_ = output_shape_error;
+        return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      }
+      if (runtime_output_shape[0] > 0 && runtime_output_shape[0] != kExpectedOutputDim)
+      {
+        last_inference_status_ = "output_shape_mismatch";
+        last_error_message_ = "model output_dim=" + std::to_string(runtime_output_shape[0]) +
+                              ", expected=" + std::to_string(kExpectedOutputDim);
+        return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      }
+      const size_t output_count = output_info.GetElementCount();
+      if (output_count != static_cast<size_t>(kExpectedOutputDim))
+      {
+        last_inference_status_ = "output_shape_mismatch";
+        last_error_message_ = "output element_count=" + std::to_string(output_count) +
+                              ", expected=" + std::to_string(kExpectedOutputDim);
         return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
       }
 
@@ -412,6 +676,7 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
           output_element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE)
       {
         last_inference_status_ = "output_type_mismatch";
+        last_error_message_ = "unsupported output element type: " + tensorElementTypeToString(output_element_type);
         return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
       }
 
@@ -439,8 +704,16 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
     if (impl_->input_element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
     {
       std::vector<float> input_tensor_values(input.data.begin(), input.data.end());
+      if (input_tensor_values.size() != expected_flat_size)
+      {
+        last_inference_status_ = "input_flat_size_mismatch";
+        last_error_message_ = "input_flat.size()=" + std::to_string(input_tensor_values.size()) +
+                              ", expected=" + std::to_string(expected_flat_size);
+        return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      }
       Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-          memory_info, input_tensor_values.data(), input_tensor_values.size(), input_shape.data(), input_shape.size());
+          memory_info, input_tensor_values.data(), input_tensor_values.size(), runtime_input_shape.data(),
+          runtime_input_shape.size());
       const char *input_names[] = {input_name_.c_str()};
       const char *output_names[] = {output_name_.c_str()};
       auto output_tensors = impl_->session->Run(
@@ -452,10 +725,27 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
       }
 
       auto output_info = output_tensors.front().GetTensorTypeAndShapeInfo();
-      const size_t output_count = output_info.GetElementCount();
-      if (output_count != PoseCorrection{}.size())
+      std::vector<int64_t> runtime_output_shape;
+      std::string output_shape_error;
+      if (!readExpectedRankShape(output_info, kExpectedOutputRank, "output", runtime_output_shape, output_shape_error))
       {
         last_inference_status_ = "output_shape_mismatch";
+        last_error_message_ = output_shape_error;
+        return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      }
+      if (runtime_output_shape[0] > 0 && runtime_output_shape[0] != kExpectedOutputDim)
+      {
+        last_inference_status_ = "output_shape_mismatch";
+        last_error_message_ = "model output_dim=" + std::to_string(runtime_output_shape[0]) +
+                              ", expected=" + std::to_string(kExpectedOutputDim);
+        return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      }
+      const size_t output_count = output_info.GetElementCount();
+      if (output_count != static_cast<size_t>(kExpectedOutputDim))
+      {
+        last_inference_status_ = "output_shape_mismatch";
+        last_error_message_ = "output element_count=" + std::to_string(output_count) +
+                              ", expected=" + std::to_string(kExpectedOutputDim);
         return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
       }
 
@@ -464,6 +754,7 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
           output_element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE)
       {
         last_inference_status_ = "output_type_mismatch";
+        last_error_message_ = "unsupported output element type: " + tensorElementTypeToString(output_element_type);
         return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
       }
 
@@ -490,11 +781,25 @@ PoseCompensator::PoseCorrection PoseCompensator::OnnxInferenceBackend::infer(con
     }
 
     last_inference_status_ = "input_type_mismatch";
+    last_error_message_ = "unsupported input element type: " + tensorElementTypeToString(impl_->input_element_type);
     return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   }
-  catch (const std::exception &)
+  catch (const Ort::Exception &e)
   {
     last_inference_status_ = "inference_exception";
+    last_error_message_ = e.what();
+    return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  }
+  catch (const std::exception &e)
+  {
+    last_inference_status_ = "inference_exception";
+    last_error_message_ = e.what();
+    return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  }
+  catch (...)
+  {
+    last_inference_status_ = "inference_exception";
+    last_error_message_ = "unknown_exception";
     return PoseCorrection{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   }
 #else
@@ -527,6 +832,11 @@ bool PoseCompensator::OnnxInferenceBackend::isIoNameReady() const
 std::string PoseCompensator::OnnxInferenceBackend::statusMessage() const
 {
   return status_message_;
+}
+
+std::string PoseCompensator::OnnxInferenceBackend::errorMessage() const
+{
+  return last_error_message_;
 }
 
 bool PoseCompensator::OnnxInferenceBackend::lastInferenceSuccess() const
@@ -694,6 +1004,11 @@ std::string PoseCompensator::backendStatusMessage() const
   return backend_status_message_;
 }
 
+std::string PoseCompensator::backendErrorMessage() const
+{
+  return backend_ ? backend_->errorMessage() : backend_error_message_;
+}
+
 bool PoseCompensator::lastInferenceSuccess() const
 {
   return backend_ ? backend_->lastInferenceSuccess() : false;
@@ -858,6 +1173,7 @@ void PoseCompensator::updateBackend()
   backend_fallback_reason_ = "none";
   backend_loaded_ = false;
   backend_status_message_ = "ready";
+  backend_error_message_ = "none";
 
   if (backend_type_ == "onnx")
   {
@@ -865,6 +1181,7 @@ void PoseCompensator::updateBackend()
     backend_ = std::make_unique<OnnxInferenceBackend>(model_path_, onnx_input_name_, onnx_output_name_, use_cpu_inference_);
     backend_loaded_ = backend_->isLoaded();
     backend_status_message_ = backend_->statusMessage();
+    backend_error_message_ = backend_->errorMessage();
     if (!backend_loaded_)
     {
       backend_fallback_active_ = true;
@@ -876,6 +1193,7 @@ void PoseCompensator::updateBackend()
     backend_fallback_active_ = true;
     backend_fallback_reason_ = "onnxruntime_unavailable";
     backend_status_message_ = "onnxruntime_not_compiled";
+    backend_error_message_ = "onnxruntime_not_compiled";
     return;
 #endif
   }
@@ -883,11 +1201,13 @@ void PoseCompensator::updateBackend()
   {
     backend_ = std::make_unique<OnnxPlaceholderBackend>(model_path_);
     backend_status_message_ = backend_->statusMessage();
+    backend_error_message_ = backend_->errorMessage();
     return;
   }
   backend_type_ = "dummy";
   backend_ = std::make_unique<DummyInferenceBackend>();
   backend_status_message_ = backend_->statusMessage();
+  backend_error_message_ = backend_->errorMessage();
 }
 
 StatesGroup PoseCompensator::compensate(const StatesGroup &state) const

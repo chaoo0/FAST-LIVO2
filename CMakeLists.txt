@@ -192,7 +192,7 @@ target_link_libraries(pose_compensator ${COMMON_DEPENDENCIES})
 if(ONNXRUNTIME_AVAILABLE)
   target_include_directories(pose_compensator PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
   target_compile_definitions(pose_compensator PRIVATE HAVE_ONNXRUNTIME=1)
-  target_link_libraries(pose_compensator PUBLIC ${ONNXRUNTIME_LIBRARY})
+  target_link_libraries(pose_compensator ${ONNXRUNTIME_LIBRARY})
 endif()
 
 # Add the main executable
