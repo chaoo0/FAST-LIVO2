@@ -2,7 +2,7 @@
   ros__parameters:
     "mamba_pose/enabled": true
     "mamba_pose/backend_type": "onnx"
-    "mamba_pose/model_path": "/ABSOLUTE/PATH/TO/FAST-LIVO2/Log/models/small_nonzero_mamba_pose.onnx"
+    "mamba_pose/model_path": "/home/liu/fast_livo2/src/FAST-LIVO2/Log/models/oversized_mamba_pose.onnx"
     "mamba_pose/onnx_input_name": "input"
     "mamba_pose/onnx_output_name": "output"
     "mamba_pose/use_cpu_inference": true
@@ -16,4 +16,4 @@
     "mamba_pose/reject_oversized_output": false
 
     "mamba_pose/export_train_data_en": false
-    "mamba_pose/export_train_data_path": "/ABSOLUTE/PATH/TO/FAST-LIVO2/Log/mamba_pose_train_data.csv"
+    "mamba_pose/export_train_data_path": "/home/liu/fast_livo2/src/FAST-LIVO2/Log/mamba_pose_train_data.csv"

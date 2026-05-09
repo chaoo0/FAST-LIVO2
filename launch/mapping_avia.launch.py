@@ -65,10 +65,10 @@ def generate_launch_description():
         use_respawn_arg,
 
         # play ros2 bag
-        # ExecuteProcess(
-        #     cmd=[['ros2 bag play ', '~/datasets/Retail_Street ', '--clock ', "-l"]], 
-        #     shell=True
-        # ),
+        ExecuteProcess(
+            cmd=[['ros2 bag play ', '~/文档/rosbag/Retail_Street ', '--clock ', "-l"]], 
+            shell=True
+        ),
 
         # republish compressed image to raw image
         # https://robotics.stackexchange.com/questions/110939/how-do-i-remap-compressed-video-to-raw-video-in-ros2
