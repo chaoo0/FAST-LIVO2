@@ -15,5 +15,7 @@
     "mamba_pose/reject_non_finite_output": true
     "mamba_pose/reject_oversized_output": false
 
-    "mamba_pose/export_train_data_en": false
+    "mamba_pose/export_train_data_en": true
     "mamba_pose/export_train_data_path": "/home/liu/fast_livo2/src/FAST-LIVO2/Log/mamba_pose_train_data.csv"
+    #"mamba_pose/export_train_data_en": false
+    #"mamba_pose/export_train_data_path": "/home/liu/fast_livo2/src/FAST-LIVO2/Log/mamba_pose_train_data.csv"
