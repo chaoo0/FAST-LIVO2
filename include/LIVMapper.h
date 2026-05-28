@@ -131,6 +131,7 @@ public:
   bool mamba_pose_train_data_header_written = false;
   bool mamba_pose_reject_non_finite_output = true;
   bool mamba_pose_reject_oversized_output = false;
+  bool mamba_pose_apply_correction_en = false;
   bool mamba_pose_use_cpu_inference = true;
   int img_en = 1, imu_int_frame = 3;
   int mamba_pose_history_len = 10;

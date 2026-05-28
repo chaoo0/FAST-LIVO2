@@ -177,6 +177,8 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
       "mamba_pose/reject_non_finite_output", "mamba_pose.reject_non_finite_output", true);
   mamba_pose_reject_oversized_output = try_declare_alias.template operator()<bool>(
       "mamba_pose/reject_oversized_output", "mamba_pose.reject_oversized_output", false);
+  mamba_pose_apply_correction_en = try_declare_alias.template operator()<bool>(
+      "mamba_pose/apply_correction_en", "mamba_pose.apply_correction_en", false);
   mamba_pose_export_train_data_en =
       try_declare_alias.template operator()<bool>("mamba_pose/export_train_data_en", "mamba_pose.export_train_data_en", false);
   mamba_pose_export_train_data_path = try_declare_alias.template operator()<std::string>(
@@ -571,12 +573,17 @@ bool LIVMapper::applyPoseCompensationIfNeeded(double timestamp, int effective_fe
   pose_compensator_.pushState(timestamp, _state, effective_feature_num, avg_residual);
   const bool ready = pose_compensator_.isReady();
   bool compensation_executed = false;
+  bool correction_applied = false;
   if (ready)
   {
     const StatesGroup compensated_state = pose_compensator_.compensate(_state);
-    _state = compensated_state;
-    voxelmap_manager->state_ = _state;
     compensation_executed = true;
+    if (mamba_pose_apply_correction_en)
+    {
+      _state = compensated_state;
+      voxelmap_manager->state_ = _state;
+      correction_applied = true;
+    }
   }
 
   if (mamba_pose_debug_log_en)
@@ -627,9 +634,11 @@ bool LIVMapper::applyPoseCompensationIfNeeded(double timestamp, int effective_fe
     }
     RCLCPP_INFO_THROTTLE(
       this->node->get_logger(), *this->node->get_clock(), 1000,
-      "[MambaPose] timestamp=%.6f history=%zu/%d ready=%s executed=%s identity=%s requested_backend=%s active_backend=%s model_path=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s fallback=%s fallback_reason=%s backend_status=%s backend_error=%s inference_status=%s seq_len=%zu feature_dim=%zu flat_input_len=%zu output_dim=%zu clamped=%s rejected=%s reject_reason=%s raw=%s safe=%s effective_features=%d avg_residual=%.6f",
+      "[MambaPose] timestamp=%.6f history=%zu/%d ready=%s executed=%s applied=%s apply_correction_en=%s identity=%s requested_backend=%s active_backend=%s model_path=%s model_loaded=%s session_ready=%s io_name_ready=%s inference_success=%s fallback=%s fallback_reason=%s backend_status=%s backend_error=%s inference_status=%s seq_len=%zu feature_dim=%zu flat_input_len=%zu output_dim=%zu clamped=%s rejected=%s reject_reason=%s raw=%s safe=%s effective_features=%d avg_residual=%.6f",
       timestamp, pose_compensator_.historySize(), pose_compensator_.historyLen(),
       ready ? "true" : "false", compensation_executed ? "true" : "false",
+      correction_applied ? "true" : "false",
+      mamba_pose_apply_correction_en ? "true" : "false",
       identity_correction ? "true" : "false", backend_type.c_str(), backend_name.c_str(),
       model_path.empty() ? "<empty>" : model_path.c_str(),
       pose_compensator_.backendLoaded() ? "true" : "false",

@@ -2,6 +2,24 @@
 
 This note is for the first end-to-end ONNX smoke test in FAST-LIVO2.
 
+Current main launch:
+
+```text
+launch/mapping_mid360.launch.py
+```
+
+Current verified no-op baseline ONNX model:
+
+```text
+Log/models/static_zero_mamba_pose.onnx
+```
+
+Current runtime-ready raw-input ONNX model:
+
+```text
+Log/models/static_zero_mamba_pose_raw_input.onnx
+```
+
 ## Goal
 
 Verify the following path once, with the safest possible model:
@@ -81,9 +99,18 @@ The sample file already uses:
 
 ## Step 3: Launch FAST-LIVO2
 
-Use your normal launch flow, but point it at the ONNX test parameter file.
+Use the current MID360 launch flow and point it at the ONNX test parameter file.
 
-If your launch setup already merges multiple YAML files, keep your existing lidar/camera config and add the ONNX test file on top. The exact command depends on your local launch method.
+Example:
+
+```bash
+ros2 launch fast_livo mapping_mid360.launch.py \
+  mamba_pose_params_file:=/home/liu/fast_livo2/src/FAST-LIVO2/config/mamba_pose_onnx_test.yaml \
+  play_bag:=true \
+  bag_path:=/home/liu/rosbags/mid360_fastlivo_mamba_20260519_211645 \
+  bag_loop:=false \
+  bag_clock:=true
+```
 
 ## What To Watch In Logs
 
@@ -148,3 +175,133 @@ Start with the provided zero-output dummy model because it lets you verify:
 - safety-layer pass-through
 
 Only after that should you swap in a real model.
+
+## Important Separation
+
+`config/mamba_pose_onnx_test.yaml` is only for ONNX smoke testing.
+
+Do not use ONNX test YAML for formal training-data export.
+
+Formal export should use:
+
+```text
+config/mamba_pose_train_export_dummy.yaml
+```
+
+## Static Zero Baseline Model
+
+The current offline training side can now export a first no-op baseline model:
+
+```text
+Log/models/static_zero_mamba_pose.onnx
+```
+
+This model is only for the current stationary-rosbag no-op baseline. It validates the ONNX interface and deployment loop, not real dynamic pose correction ability.
+
+### ONNX Interface
+
+- input name: `input`
+- output name: `output`
+- input shape: `[10, 18]`
+- output shape: `[6]`
+- output meaning:
+  `[d_roll, d_pitch, d_yaw, d_tx, d_ty, d_tz]`
+
+### How To Produce It
+
+```bash
+python3 scripts/train_mamba_pose_static_zero.py
+```
+
+### ONNX Smoke Test
+
+The training script already performs an automatic smoke test when both `onnx` and `onnxruntime` are installed.
+
+Equivalent manual check:
+
+```bash
+python3 - <<'PY'
+import numpy as np
+import onnx
+import onnxruntime as ort
+
+path = "Log/models/static_zero_mamba_pose.onnx"
+onnx_model = onnx.load(path)
+onnx.checker.check_model(onnx_model)
+session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+output = session.run(["output"], {"input": np.zeros((10, 18), dtype=np.float32)})[0]
+print("output_shape=", output.shape)
+print("output=", output)
+PY
+```
+
+### Runtime Loading Note
+
+For FAST-LIVO2 runtime verification, keep:
+
+- `mamba_pose/backend_type=onnx`
+- `mamba_pose/onnx_input_name=input`
+- `mamba_pose/onnx_output_name=output`
+
+and point:
+
+```text
+mamba_pose/model_path = /home/liu/fast_livo2/src/FAST-LIVO2/Log/models/static_zero_mamba_pose_raw_input.onnx
+```
+
+Expected stationary no-op behavior:
+
+- `active_backend=onnx`
+- `model_loaded=true`
+- `session_ready=true`
+- `io_name_ready=true`
+- `inference_success=true`
+- `raw` close to zero
+- `safe` close to zero
+
+## Raw-Input Runtime-Ready ONNX
+
+The normalized-input model above is useful for offline comparison, but it should not be wired directly into the current FAST-LIVO2 C++ ONNX backend.
+
+Reason:
+
+> FAST-LIVO2 currently sends raw basic18 features into ONNX at runtime, not normalized features.
+
+The runtime-ready export is:
+
+```text
+Log/models/static_zero_mamba_pose_raw_input.onnx
+```
+
+Its interface is still:
+
+- input name: `input`
+- output name: `output`
+- input shape: `[10, 18]`
+- output shape: `[6]`
+
+but inside the ONNX graph it first computes:
+
+```text
+X_normalized = (input - mean) / std_safe
+```
+
+and only then forwards the normalized tensor into the trained static-zero MLP.
+
+### How To Produce The Raw-Input ONNX
+
+```bash
+python3 scripts/export_static_zero_mamba_pose_raw_input_onnx.py
+```
+
+### Raw vs Normalized ONNX Comparison
+
+The export script compares:
+
+- `static_zero_mamba_pose_raw_input.onnx(raw X[i])`
+- `static_zero_mamba_pose.onnx(X_normalized[i])`
+
+Expected:
+
+- the two outputs should be very close
+- the output should still be close to zero on the current stationary samples
