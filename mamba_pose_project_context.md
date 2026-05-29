@@ -683,6 +683,24 @@ Current interpretation:
 
 > The raw-input ONNX runtime path is now verified separately from the state-writeback path. This lets us observe unstable `static_zero` model outputs safely before enabling true correction application.
 
+Current verified observe-only runtime result:
+
+- `requested_backend=onnx`
+- `active_backend=onnx`
+- `model_loaded=true`
+- `session_ready=true`
+- `io_name_ready=true`
+- `inference_success=true`
+- `executed=true`
+- `apply_correction_en=false`
+- `applied=false`
+- `raw` / `safe` output are visible
+- FAST-LIVO2 point cloud no longer flies away in this mode
+
+Current interpretation update:
+
+> The observe-only runtime verification is now passed. The ONNX inference chain is live and can be monitored safely, but the current `static_zero` baseline is still not suitable for closed-loop correction writeback.
+
 ---
 
 ## 10. Current Data Scale And Artifacts
@@ -719,7 +737,7 @@ Current interpretation:
 - the first baseline `y` dataset is now available as `static_zero`
 - the first no-op baseline model and ONNX artifact are now available
 - the runtime-ready raw-input ONNX wrapper is now available
-- the runtime path now has an observe-only switch so inference can be inspected without modifying `_state`
+- the runtime path now has an observe-only switch and that observe-only validation is already passed
 - current artifacts still do not define the final real dynamic correction label `y`
 - `gt_*` fields remain reserved and should not be treated as ready-made labels
 
@@ -731,8 +749,9 @@ Current bottlenecks are now on the training-target side rather than the X-side p
 
 - there is still no finalized real dynamic correction-label definition `y`
 - the current `static_zero` dataset and model only validate a stationary no-op baseline
+- the current `static_zero` baseline still cannot be safely used for true closed-loop correction application
 - later training and deployment must keep the same normalization parameters between Python training and ONNX-side inference preprocessing
-- the exported raw-input no-op ONNX model still needs observe-only runtime verification before any future correction application is enabled
+- the next main gap is now dynamic-data and label-target design rather than X-side preprocessing or observe-only runtime wiring
 
 ---
 
@@ -740,15 +759,16 @@ Current bottlenecks are now on the training-target side rather than the X-side p
 
 Current next recommended task:
 
-> Use `Log/models/static_zero_mamba_pose_raw_input.onnx` with `config/mamba_pose_static_zero_runtime_observe_only.yaml` and verify the runtime ONNX path in observe-only mode before allowing any correction writeback.
+> Move beyond the stationary `static_zero` baseline: collect or use dynamic rosbag data, then design a real or pseudo correction-label `y` on top of the already-verified X-side preprocessing and observe-only runtime path.
 
 Recommended next steps:
 
-1. Run FAST-LIVO2 with `config/mamba_pose_static_zero_runtime_observe_only.yaml`.
-2. Confirm runtime logs show `active_backend=onnx`, `model_loaded=true`, `session_ready=true`, `io_name_ready=true`, and `inference_success=true`.
-3. Confirm the new log fields show `apply_correction_en=false` and `applied=false`, even after the model becomes ready and inference starts running.
-4. Use this observe-only round to inspect whether `raw` / `safe` remain near zero or drift over time without risking `_state` corruption.
-5. After observe-only runtime behavior is understood, decide whether to tighten rejection policy or move directly to a real correction-label `y` design for dynamic training data.
+1. Acquire or switch to a dynamic rosbag instead of the current stationary bag.
+2. Keep the existing X-side pipeline unchanged:
+   CSV clean -> short-gap interpolate -> T=10 sequence build -> feature norm.
+3. Design a real or pseudo correction-label `y` for dynamic motion cases.
+4. Build the next training dataset using the same `basic18` feature order and the same normalization contract.
+5. Only revisit true runtime correction application after a dynamic-label model shows stable offline behavior.
 
 ---
 

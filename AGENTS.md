@@ -177,7 +177,7 @@ Use this file when validating the raw-input `static_zero` ONNX model inside FAST
 Current next work:
 
 ```text
-Run runtime no-op verification with Log/models/static_zero_mamba_pose_raw_input.onnx in observe-only mode first, then later replace the label side with a real correction target on top of the same X-side pipeline.
+The observe-only runtime verification with Log/models/static_zero_mamba_pose_raw_input.onnx has passed; next move to dynamic rosbag collection / usage and real or pseudo correction-label y design on top of the same X-side pipeline.
 ```
 
 The current offline artifacts now include a `static_zero` baseline label dataset, but that label is only valid for the current stationary rosbag and does not define the final real correction target y.
@@ -188,6 +188,14 @@ The runtime path now separates:
 - `mamba_pose/apply_correction_en`: control whether the compensated state is actually written back into `_state` and `voxelmap_manager->state_`
 
 Default for `mamba_pose/apply_correction_en` is `false`, so new runtime validation should start in observe-only mode.
+The current runtime success criterion for the stationary `static_zero` baseline is:
+
+- `apply_correction_en=false`
+- `applied=false`
+- ONNX inference still succeeds and logs `raw` / `safe`
+- FAST-LIVO2 state and map stay stable
+
+The current `static_zero` baseline still must not be used for true closed-loop correction application. It only validates the runtime inference path in observe-only mode.
 
 ---
 

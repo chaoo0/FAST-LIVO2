@@ -269,6 +269,30 @@ Important note:
 
 > For the current runtime round, `raw` / `safe` being exactly near zero is no longer the only pass criterion. If the model output drifts over time, the main safety success condition is still `applied=false` together with stable FAST-LIVO2 state, because this round is meant to observe model behavior without closing the loop.
 
+### Current Observe-Only Status
+
+The current observe-only runtime round is already verified as passed.
+
+Verified success fields include:
+
+```text
+executed=true
+applied=false
+apply_correction_en=false
+requested_backend=onnx
+active_backend=onnx
+model_loaded=true
+session_ready=true
+io_name_ready=true
+inference_success=true
+```
+
+Observed result:
+
+- `raw` / `safe` are emitted normally for inspection
+- point cloud no longer flies away in observe-only mode
+- the current `static_zero` baseline still must not be promoted to true closed-loop correction apply
+
 ### Failure Focus For This Round
 
 If the no-op baseline fails at runtime, check these first:
