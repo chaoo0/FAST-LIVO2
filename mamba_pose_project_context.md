@@ -437,7 +437,7 @@ effective_feature_num,
 avg_residual
 ```
 
-Current verified sequence comparison:
+Earlier sequence comparison on the first short test export:
 
 ```text
 clean baseline:
@@ -474,10 +474,10 @@ Purpose:
 - output `Log/mamba_pose_feature_norm_T10_interpolated_report.txt`
 - optionally output `Log/mamba_pose_sequences_T10_interpolated_normalized.npz`
 
-Current verified result:
+Current verified result on the current dynamic export:
 
 ```text
-input X shape = [1298, 10, 18]
+input X shape = [9741, 10, 18]
 X_global_nan_count = 0
 X_global_inf_count = 0
 std_lt_epsilon_features = none
@@ -505,7 +505,7 @@ Purpose:
 - output `Log/mamba_pose_static_zero_label_dataset_T10.npz`
 - output `Log/mamba_pose_static_zero_label_dataset_T10_report.txt`
 
-Current verified result:
+Earlier stationary-baseline verified result:
 
 ```text
 X_normalized shape = [9919, 10, 18]
@@ -553,7 +553,7 @@ Log/models/static_zero_mamba_pose_train_log.csv
 Log/models/static_zero_mamba_pose_train_report.txt
 ```
 
-Current verified training result:
+Earlier stationary-baseline verified training result:
 
 ```text
 dataset X shape = [9919, 10, 18]
@@ -701,6 +701,176 @@ Current interpretation update:
 
 > The observe-only runtime verification is now passed. The ONNX inference chain is live and can be monitored safely, but the current `static_zero` baseline is still not suitable for closed-loop correction writeback.
 
+### 9.9 Dynamic Pseudo Correction-Label Dataset
+
+Implemented script:
+
+```text
+scripts/build_mamba_pose_pseudo_label_dataset.py
+```
+
+Purpose:
+
+- read `Log/mamba_pose_train_data_interpolated.csv`
+- read `Log/mamba_pose_sequences_T10_interpolated_normalized.npz`
+- read `Log/mamba_pose_feature_norm_T10_interpolated.npz`
+- build a first dynamic pseudo correction-label dataset
+- output `Log/mamba_pose_pseudo_label_dataset_T10_smooth.npz`
+- output `Log/mamba_pose_pseudo_label_dataset_T10_smooth_report.txt`
+
+Smoothing definition:
+
+- default `smooth_window_sec = 1.0`
+- for target frame timestamp `t_i`, smooth only inside the same continuous segment
+- use the symmetric timestamp window `[t_i - 0.5, t_i + 0.5]`
+- position uses uniform averaging
+- rotation uses hemisphere-aligned quaternion averaging followed by normalization
+
+Label target definition:
+
+- each sequence label corresponds to the sequence last frame
+- `target_index = source_indices[n, -1]`
+- `target_timestamp = timestamps[n, -1]`
+
+Pseudo-label formula:
+
+```text
+d_t = p_ref - p_est
+d_R = R_est^T * R_ref
+y = [d_roll, d_pitch, d_yaw, d_tx, d_ty, d_tz]
+```
+
+where `d_R` is converted to roll / pitch / yaw.
+
+Current verified output files:
+
+```text
+Log/mamba_pose_pseudo_label_dataset_T10_smooth.npz
+Log/mamba_pose_pseudo_label_dataset_T10_smooth_report.txt
+```
+
+Current verified result:
+
+```text
+csv_rows = 9786
+original_sequence_count = 9741
+output_valid_sequence_count = 9597
+dropped_sequence_count = 144
+segment_count = 5
+average_neighbor_count = 14.971388
+source_index_out_of_range_count = 0
+timestamp_mismatch_count = 0
+dropped_by_invalid_reference_frame = 0
+dropped_by_nan_inf = 0
+dropped_by_rot_limit = 144
+dropped_by_trans_limit = 0
+kept_ratio = 98.52%
+y shape = [9597, 6]
+label_type = pseudo_smooth_reference
+```
+
+Current label-distribution snapshot:
+
+```text
+d_roll abs_max = 0.098149
+d_pitch abs_max = 0.099732
+d_yaw abs_max = 0.099712
+d_tx abs_max = 0.079342
+d_ty abs_max = 0.047032
+d_tz abs_max = 0.065165
+```
+
+Current interpretation:
+
+> This is the first dynamic pseudo-label dataset built on top of the existing X-side pipeline. It is not ground truth, but it is no longer the trivial all-zero stationary baseline.
+
+### 9.10 Pseudo-Label Baseline Training And ONNX Export
+
+Implemented script:
+
+```text
+scripts/train_mamba_pose_pseudo_label.py
+```
+
+Selected training dataset:
+
+```text
+Log/mamba_pose_pseudo_label_dataset_T10_selected.npz
+```
+
+Current selected pseudo-label source:
+
+- derived from `Log/mamba_pose_pseudo_label_dataset_T10_smooth_0p5s.npz`
+- `smooth_window_sec = 0.5`
+- selected because label amplitude is more conservative and kept ratio is high
+
+Current output files:
+
+```text
+Log/models/pseudo_smooth_mamba_pose.pt
+Log/models/pseudo_smooth_mamba_pose.onnx
+Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
+Log/models/pseudo_smooth_mamba_pose_train_log.csv
+Log/models/pseudo_smooth_mamba_pose_train_report.txt
+Log/models/pseudo_smooth_mamba_pose_raw_input_onnx_report.txt
+```
+
+Current verified training result:
+
+```text
+dataset X shape = [9717, 10, 18]
+dataset y shape = [9717, 6]
+train_size = 7774
+val_size = 1943
+epochs = 50
+batch_size = 128
+best_train_loss = 0.000023
+best_val_loss = 0.000022
+final_train_loss = 0.000027
+final_val_loss = 0.000024
+pred_abs_max = 0.020122
+pred_abs_mean = 0.001943
+target_abs_max = 0.088035
+target_abs_mean = 0.003068
+error_abs_max = 0.072563
+error_abs_mean = 0.002552
+```
+
+Current verified normalized-input ONNX result:
+
+```text
+normalized_onnx_export_status = exported
+normalized_onnx_checker_status = passed
+normalized_onnxruntime_status = passed
+normalized_onnx_output_abs_max = 0.005001
+normalized_onnx_output_abs_mean = 0.001870
+normalized_onnx_input_shape = [10, 18]
+normalized_onnx_output_shape = [6]
+```
+
+Current verified raw-input ONNX result:
+
+```text
+raw_input_onnx_export_status = exported
+raw_input_onnx_checker_status = passed
+raw_input_onnxruntime_status = passed
+raw_input_onnx_output_abs_max = 0.005001
+raw_input_onnx_output_abs_mean = 0.001870
+raw_input_onnx_input_shape = [10, 18]
+raw_input_onnx_output_shape = [6]
+```
+
+Current raw-vs-normalized ONNX cross-check:
+
+```text
+output_diff_abs_max_between_raw_and_normalized_onnx = 0.000000
+output_diff_abs_mean_between_raw_and_normalized_onnx = 0.000000
+```
+
+Current interpretation:
+
+> The first pseudo-label baseline training / checkpoint / ONNX / raw-input ONNX loop is now verified offline. This still does not prove real dynamic pose correction ability, because the supervision target is `pseudo_smooth_reference`, not ground truth.
+
 ---
 
 ## 10. Current Data Scale And Artifacts
@@ -708,11 +878,12 @@ Current interpretation update:
 Current verified offline-data scale:
 
 ```text
-current latest rosbag state = stationary
-interpolated CSV rows = 9928
-interpolated T=10 sequence count = 9919
-normalized sequence count = 9919
-static zero-label dataset count = 9919
+current latest offline export state = dynamic trajectory
+interpolated CSV rows = 9786
+interpolated T=10 sequence count = 9741
+normalized sequence count = 9741
+pseudo smooth-reference dataset count = 9597
+selected 0.5s pseudo-label dataset count = 9717
 feature_dim = 18
 label_dim = 6
 ```
@@ -725,9 +896,14 @@ Log/mamba_pose_sequences_T10_interpolated.npz
 Log/mamba_pose_feature_norm_T10_interpolated.npz
 Log/mamba_pose_sequences_T10_interpolated_normalized.npz
 Log/mamba_pose_static_zero_label_dataset_T10.npz
+Log/mamba_pose_pseudo_label_dataset_T10_smooth.npz
+Log/mamba_pose_pseudo_label_dataset_T10_selected.npz
 Log/models/static_zero_mamba_pose.pt
 Log/models/static_zero_mamba_pose.onnx
 Log/models/static_zero_mamba_pose_raw_input.onnx
+Log/models/pseudo_smooth_mamba_pose.pt
+Log/models/pseudo_smooth_mamba_pose.onnx
+Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
 config/mamba_pose_static_zero_runtime_observe_only.yaml
 ```
 
@@ -735,10 +911,12 @@ Current interpretation:
 
 - the X-side data preparation chain is now available from CSV export to normalized sequence NPZ
 - the first baseline `y` dataset is now available as `static_zero`
+- the first dynamic pseudo correction-label dataset is now available as `pseudo_smooth_reference`
+- the selected 0.5s pseudo-label dataset is now trained into a first pseudo-label baseline model
 - the first no-op baseline model and ONNX artifact are now available
 - the runtime-ready raw-input ONNX wrapper is now available
 - the runtime path now has an observe-only switch and that observe-only validation is already passed
-- current artifacts still do not define the final real dynamic correction label `y`
+- current artifacts now include a first dynamic pseudo label and first pseudo-label baseline ONNX, but it is still not ground truth
 - `gt_*` fields remain reserved and should not be treated as ready-made labels
 
 ---
@@ -749,9 +927,11 @@ Current bottlenecks are now on the training-target side rather than the X-side p
 
 - there is still no finalized real dynamic correction-label definition `y`
 - the current `static_zero` dataset and model only validate a stationary no-op baseline
+- the current `pseudo_smooth_reference` label is only a first teacher signal from a smoothed trajectory, not GT
+- the current pseudo-label model is still only pseudo-label supervised and must not be interpreted as GT-supervised dynamic correction
 - the current `static_zero` baseline still cannot be safely used for true closed-loop correction application
 - later training and deployment must keep the same normalization parameters between Python training and ONNX-side inference preprocessing
-- the next main gap is now dynamic-data and label-target design rather than X-side preprocessing or observe-only runtime wiring
+- the next main gap is now observe-only runtime verification of the pseudo-label raw-input ONNX before any stronger deployment claim
 
 ---
 
@@ -759,16 +939,16 @@ Current bottlenecks are now on the training-target side rather than the X-side p
 
 Current next recommended task:
 
-> Move beyond the stationary `static_zero` baseline: collect or use dynamic rosbag data, then design a real or pseudo correction-label `y` on top of the already-verified X-side preprocessing and observe-only runtime path.
+> Use `Log/models/pseudo_smooth_mamba_pose_raw_input.onnx` inside FAST-LIVO2 with `apply_correction_en=false` and perform observe-only runtime validation before discussing any stronger deployment step.
 
 Recommended next steps:
 
-1. Acquire or switch to a dynamic rosbag instead of the current stationary bag.
-2. Keep the existing X-side pipeline unchanged:
+1. Point `mamba_pose/model_path` at `Log/models/pseudo_smooth_mamba_pose_raw_input.onnx`.
+2. Keep `mamba_pose/apply_correction_en=false` and verify `applied=false` in runtime logs.
+3. Observe `raw` / `safe` output distribution first; do not enable true state writeback yet.
+4. Keep the existing X-side pipeline unchanged:
    CSV clean -> short-gap interpolate -> T=10 sequence build -> feature norm.
-3. Design a real or pseudo correction-label `y` for dynamic motion cases.
-4. Build the next training dataset using the same `basic18` feature order and the same normalization contract.
-5. Only revisit true runtime correction application after a dynamic-label model shows stable offline behavior.
+5. Only revisit stronger label definitions or any future closed-loop discussion after the pseudo-label runtime observe-only round is stable.
 
 ---
 
@@ -801,6 +981,8 @@ scripts/compute_mamba_pose_feature_norm.py
 scripts/build_mamba_pose_static_zero_label_dataset.py
 scripts/train_mamba_pose_static_zero.py
 scripts/export_static_zero_mamba_pose_raw_input_onnx.py
+scripts/build_mamba_pose_pseudo_label_dataset.py
+scripts/train_mamba_pose_pseudo_label.py
 ```
 
 ### Runtime Integration Files
@@ -930,6 +1112,18 @@ python3 scripts/train_mamba_pose_static_zero.py
 
 ```bash
 python3 scripts/export_static_zero_mamba_pose_raw_input_onnx.py
+```
+
+### Build Dynamic Pseudo Label Dataset
+
+```bash
+python3 scripts/build_mamba_pose_pseudo_label_dataset.py
+```
+
+### Train Pseudo-Label Baseline And Export ONNX
+
+```bash
+python3 scripts/train_mamba_pose_pseudo_label.py
 ```
 
 ### Run Runtime Observe-Only Verification

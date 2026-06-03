@@ -81,7 +81,7 @@ def generate_launch_description():
 
     bag_path_arg = DeclareLaunchArgument(
         'bag_path',
-        default_value='/home/liu/rosbags/mid360_fastlivo_mamba_20260519_211645',
+        default_value='',
         description='Full path to the rosbag to play when play_bag is enabled.',
     )
 

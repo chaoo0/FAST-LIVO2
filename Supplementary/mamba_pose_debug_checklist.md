@@ -311,6 +311,111 @@ If the no-op baseline fails at runtime, check these first:
 
 ---
 
+## Dynamic Pseudo-Label Dataset Checks
+
+The current dynamic-data stage now also includes:
+
+```text
+scripts/build_mamba_pose_pseudo_label_dataset.py
+```
+
+This script builds:
+
+```text
+Log/mamba_pose_pseudo_label_dataset_T10_smooth.npz
+```
+
+with:
+
+```text
+label_type = pseudo_smooth_reference
+```
+
+Important:
+
+- this dataset is pseudo labeled, not GT
+- each label corresponds to the last frame of the input sequence
+- the pseudo reference is built from same-segment timestamp-window smoothing
+
+### Dataset Checks To Watch
+
+Before using the pseudo-label dataset for training, confirm:
+
+1. `y` is not all zero.
+2. `label_type=pseudo_smooth_reference`.
+3. dropped ratio is not unexpectedly high.
+4. most dropped samples are explainable by explicit limits, not by alignment failure.
+5. `source_index_out_of_range_count` and `timestamp_mismatch_count` stay near zero.
+6. `dropped_by_nan_inf` stays zero.
+7. `abs max` per label dimension is within the configured limits.
+8. the report clearly states the labels are pseudo, not ground truth.
+
+### First Verified Pseudo-Label Build
+
+Current verified default run includes:
+
+```text
+csv_rows = 9786
+original_sequence_count = 9741
+output_valid_sequence_count = 9597
+dropped_sequence_count = 144
+source_index_out_of_range_count = 0
+timestamp_mismatch_count = 0
+dropped_by_nan_inf = 0
+dropped_by_rot_limit = 144
+dropped_by_trans_limit = 0
+kept_ratio = 98.52%
+y shape = [9597, 6]
+```
+
+Interpretation:
+
+- the pseudo labels are no longer the trivial all-zero baseline
+- the current filtering is dominated by rotation-limit clipping, not by bad indexing or NaN / Inf
+- this is a usable first teacher signal for offline inspection, not proof of true correction quality
+
+### Pseudo-Label Runtime Observe-Only Round
+
+After the first pseudo-label baseline is trained, the recommended runtime model is:
+
+```text
+Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
+```
+
+Do not point FAST-LIVO2 runtime directly at:
+
+```text
+Log/models/pseudo_smooth_mamba_pose.onnx
+```
+
+because that normalized-input ONNX expects already-normalized features and is only for offline export verification.
+
+Before runtime validation, confirm:
+
+1. `mamba_pose/model_path` points to `Log/models/pseudo_smooth_mamba_pose_raw_input.onnx`.
+2. `mamba_pose/backend_type=onnx`.
+3. `mamba_pose/onnx_input_name=input`.
+4. `mamba_pose/onnx_output_name=output`.
+5. `mamba_pose/apply_correction_en=false`.
+
+Runtime success signals for this round:
+
+1. `model_loaded=true`
+2. `session_ready=true`
+3. `io_name_ready=true`
+4. `inference_success=true`
+5. `apply_correction_en=false`
+6. `applied=false`
+7. `raw` / `safe` are visible and observed first before any stronger conclusion
+
+Important:
+
+- this is still observe-only validation
+- do not switch to `apply_correction_en=true`
+- do not interpret stable inference as proof of true dynamic correction ability
+
+---
+
 ## Success Conditions By Round
 
 ### Round 1 Success

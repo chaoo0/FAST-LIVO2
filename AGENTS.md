@@ -44,7 +44,7 @@ The ONNX Runtime engineering loop has already been verified with normal / clamp 
 
 The current offline data-preparation stage is:
 
-> Keep the FAST-LIVO2 C++ main flow stable, use the existing offline scripts to clean exported CSV, interpolate short timestamp gaps, build fixed-length sequences, compute feature normalization statistics, build a static zero-label baseline dataset, and train / export a first no-op baseline ONNX model.
+> Keep the FAST-LIVO2 C++ main flow stable, use the existing offline scripts to clean exported CSV, interpolate short timestamp gaps, build fixed-length sequences, compute feature normalization statistics, preserve the stationary `static_zero` baseline for runtime-loop validation, and now train the first dynamic `pseudo_smooth_reference` baseline plus raw-input ONNX on top of the same X-side pipeline.
 
 After every code-development or script-development task, always sync the relevant project Markdown documents before ending the task.
 
@@ -141,6 +141,8 @@ The following are already verified:
 - `scripts/build_mamba_pose_static_zero_label_dataset.py` is already implemented.
 - `scripts/train_mamba_pose_static_zero.py` is already implemented.
 - `scripts/export_static_zero_mamba_pose_raw_input_onnx.py` is already implemented.
+- `scripts/build_mamba_pose_pseudo_label_dataset.py` is already implemented.
+- `scripts/train_mamba_pose_pseudo_label.py` is already implemented.
 
 Current generated CSV:
 
@@ -177,10 +179,18 @@ Use this file when validating the raw-input `static_zero` ONNX model inside FAST
 Current next work:
 
 ```text
-The observe-only runtime verification with Log/models/static_zero_mamba_pose_raw_input.onnx has passed; next move to dynamic rosbag collection / usage and real or pseudo correction-label y design on top of the same X-side pipeline.
+The observe-only runtime verification with Log/models/static_zero_mamba_pose_raw_input.onnx has passed, the 0.5s pseudo-label baseline is now trained, and the next step is FAST-LIVO2 observe-only runtime validation with Log/models/pseudo_smooth_mamba_pose_raw_input.onnx.
 ```
 
 The current offline artifacts now include a `static_zero` baseline label dataset, but that label is only valid for the current stationary rosbag and does not define the final real correction target y.
+The current dynamic-data stage additionally uses `scripts/build_mamba_pose_pseudo_label_dataset.py` to build `label_type=pseudo_smooth_reference`, where each sequence label is aligned to the sequence last frame and computed against a same-segment smoothed reference trajectory.
+The current pseudo-label baseline training stage uses `scripts/train_mamba_pose_pseudo_label.py` with the selected 0.5s dataset and exports:
+
+- `Log/models/pseudo_smooth_mamba_pose.pt`
+- `Log/models/pseudo_smooth_mamba_pose.onnx`
+- `Log/models/pseudo_smooth_mamba_pose_raw_input.onnx`
+
+The raw-input ONNX model is the one intended for FAST-LIVO2 runtime observe-only validation. The normalized-input ONNX model is only for offline inference / export verification.
 The raw-input ONNX wrapper is required because FAST-LIVO2 currently sends raw basic18 features to the ONNX backend, not pre-normalized features.
 The runtime path now separates:
 

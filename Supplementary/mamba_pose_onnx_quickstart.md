@@ -20,6 +20,13 @@ Current runtime-ready raw-input ONNX model:
 Log/models/static_zero_mamba_pose_raw_input.onnx
 ```
 
+Current pseudo-label baseline ONNX models:
+
+```text
+Log/models/pseudo_smooth_mamba_pose.onnx
+Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
+```
+
 ## Goal
 
 Verify the following path once, with the safest possible model:
@@ -258,6 +265,104 @@ Expected stationary no-op behavior:
 - `inference_success=true`
 - `raw` close to zero
 - `safe` close to zero
+
+## Pseudo-Label Baseline ONNX
+
+The current dynamic pseudo-label baseline can now export two ONNX variants:
+
+### Normalized-Input ONNX
+
+```text
+Log/models/pseudo_smooth_mamba_pose.onnx
+```
+
+This model expects:
+
+- input name: `input`
+- input shape: `[10, 18]`
+- input dtype: `float32`
+- input meaning: already-normalized `X_normalized`
+- output name: `output`
+- output shape: `[6]`
+
+Use this model for offline export verification only.
+
+### Raw-Input ONNX
+
+```text
+Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
+```
+
+This model expects:
+
+- input name: `input`
+- input shape: `[10, 18]`
+- input dtype: `float32`
+- input meaning: raw `basic18`
+- output name: `output`
+- output shape: `[6]`
+
+This is the recommended FAST-LIVO2 runtime model, because it embeds:
+
+```text
+X_normalized = (input - mean) / std_safe
+```
+
+inside ONNX and therefore matches the current C++ backend without modifying FAST-LIVO2.
+
+### How To Produce Both
+
+```bash
+python3 scripts/train_mamba_pose_pseudo_label.py
+```
+
+### Smoke Test Command
+
+Equivalent manual check for both ONNX variants:
+
+```bash
+python3 - <<'PY'
+import numpy as np
+import onnx
+import onnxruntime as ort
+
+repo = "/home/liu/fast_livo2/src/FAST-LIVO2"
+norm_model = f"{repo}/Log/models/pseudo_smooth_mamba_pose.onnx"
+raw_model = f"{repo}/Log/models/pseudo_smooth_mamba_pose_raw_input.onnx"
+norm_npz = np.load(f"{repo}/Log/mamba_pose_sequences_T10_interpolated_normalized.npz", allow_pickle=True)
+raw_npz = np.load(f"{repo}/Log/mamba_pose_sequences_T10_interpolated.npz", allow_pickle=True)
+
+norm_x = norm_npz["X_normalized"][0].astype(np.float32)
+raw_x = raw_npz["X"][0].astype(np.float32)
+
+for path, sample in [(norm_model, norm_x), (raw_model, raw_x)]:
+    model = onnx.load(path)
+    onnx.checker.check_model(model)
+    sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+    out = sess.run(["output"], {"input": sample})[0]
+    print(path, "shape=", out.shape, "abs_max=", np.max(np.abs(out)))
+PY
+```
+
+### Runtime Loading Note
+
+For FAST-LIVO2 runtime observe-only validation, point:
+
+```text
+mamba_pose/model_path = /home/liu/fast_livo2/src/FAST-LIVO2/Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
+```
+
+and keep:
+
+```text
+mamba_pose/apply_correction_en=false
+```
+
+Important:
+
+- `pseudo_smooth_mamba_pose.onnx` is normalized-input only
+- `pseudo_smooth_mamba_pose_raw_input.onnx` is the runtime-ready raw-input model
+- current runtime validation must stay in observe-only mode first
 
 ## Raw-Input Runtime-Ready ONNX
 
