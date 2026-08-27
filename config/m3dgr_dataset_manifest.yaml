@@ -1,0 +1,146 @@
+# M3DGR acquisition/provenance manifest for FAST-LIVO2 + MambaPose.
+#
+# Fill artifact paths only after downloading from the official data page and
+# verifying bag_sha256.  Empty paths are deliberate: formal dataset assembly
+# fails closed and never substitutes a different sequence.
+dataset:
+  name: M3DGR
+  repository: https://github.com/sjtuyinjie/M3DGR
+  paper: https://arxiv.org/abs/2507.08364
+  official_checksums: https://github.com/sjtuyinjie/M3DGR/blob/main/checksums.txt
+  calibration: https://github.com/sjtuyinjie/M3DGR/blob/main/calibration.md
+  repository_license: MIT
+  external_data_license_status: verify_after_download
+  citation_required: true
+  manifest_review_date: "2026-08-08"
+
+frame_convention_version: m3dgr_mocap_gtbody_to_fastlivo_imu_right_se3_v1
+lio_covariance_profile: pending_train_only_selection
+pilot_sequence: Varying-illu02
+
+sequences:
+  Dynamic01:
+    split: train
+    bag_relative_path: Visual_Challenge/indoor/Dynamic01.bag
+    bag_sha256: a32001be0f59e04b1822a3b57b2a082141525d45ce0653e2c091badf4363d7f0
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Occlusion01:
+    split: train
+    bag_relative_path: Visual_Challenge/indoor/Occlusion01.bag
+    bag_sha256: 0731f4f465d1c61c790736c08be1abb146832b8376e23aa21fca552df380399c
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Varying-illu01:
+    split: train
+    bag_relative_path: Visual_Challenge/indoor/Varying-illu01.bag
+    bag_sha256: 0b7512f9826074a29a4aea72ecd46c0bb031e4b80c9c94ece7ce44e7c06bd472
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Dark03:
+    split: train
+    bag_relative_path: Visual_Challenge/indoor/Dark03.bag
+    bag_sha256: 057dfcb655900d69bffdd11245a1d9f423089bdf180f07b30af74548bed98f1e
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Wheel-float01:
+    split: train
+    bag_relative_path: Wheel_Slippage/indoor/Wheel-float01.bag
+    bag_sha256: 366171a5f1d0c1e7bd602e2b664d85dbd89dd08570c4165142ef9849029c1cf6
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Sha-turn01:
+    split: train
+    bag_relative_path: Wheel_Slippage/indoor/Sha-turn01.bag
+    bag_sha256: 7771f7f85571c9d6d3ff5ad84e6f304c4417cb86e98b8bc14378df758c3ff8c4
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+
+  Dynamic02:
+    split: val
+    bag_relative_path: Visual_Challenge/indoor/Dynamic02.bag
+    bag_sha256: 251bb3e9995737164327c1e4b7f380ab4c39ad69d9db2a095d6ed74c7641cfa9
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Wheel-float02:
+    split: val
+    bag_relative_path: Wheel_Slippage/indoor/Wheel-float02.bag
+    bag_sha256: 1b5479a036d3a85732dce78b67327813964cab2e2058f32b64afd1f32c4a0855
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+
+  Occlusion02:
+    split: test
+    bag_relative_path: Visual_Challenge/indoor/Occlusion02.bag
+    bag_sha256: 8609926a8c3bf243b4f29fc3f5bcc9339226b777cfa88f575414fc5ae3af218d
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Varying-illu02:
+    split: test
+    bag_relative_path: Visual_Challenge/indoor/Varying-illu02.bag
+    bag_sha256: 73e78a0dedd0c039ec3bb1e0d236ab1c737eeb3213297acab1cc336aa51a430d
+    bag_download_url: "https://1drv.ms/u/c/2b4bfc0edf421186/EYYRQt8O_EsggCvvDwAAAAAB3Jujlynvxek3n-_adaCZZQ?e=yc6hav"
+    gt_download_url: https://raw.githubusercontent.com/sjtuyinjie/M3DGR/main/Varying-illu02.txt
+    gt_sha256: 293f0ef2b9c552f14772e512a9f6634d84cb09224bb3ddc50f2c6f6c04535d0f
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Dark04:
+    split: test
+    bag_relative_path: Visual_Challenge/indoor/Dark04.bag
+    bag_sha256: 3ec1a5460b0a7b025fb9029a4a56d8dcc7978fb457b0cdf2c2e480b97d316240
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""
+  Sha-turn02:
+    split: test
+    bag_relative_path: Wheel_Slippage/indoor/Sha-turn02.bag
+    bag_sha256: 01fb39e74e219bfa693a32bcbb4a5f49aa5898623f33cf51927aff7b8cc570e2
+    ros1_bag: ""
+    ros2_bag: ""
+    gt_tum: ""
+    lio_csv: ""
+    aligned_csv: ""
+    alignment_report: ""

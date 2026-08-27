@@ -1,0 +1,19 @@
+/**:
+  ros__parameters:
+    "mamba_pose/enabled": true
+    "mamba_pose/backend_type": "dummy"
+    "mamba_pose/model_path": ""
+    "mamba_pose/history_len": 10
+    "mamba_pose/min_ready_frames": 10
+    "mamba_pose/debug_log_en": false
+    "mamba_pose/apply_correction_en": false
+
+    "mamba_pose/export_train_data_en": true
+    # mapping_m3dgr_lio.launch.py overrides this with
+    # Log/runs/m3dgr_<sequence>/mamba_pose_train_data.csv.
+    "mamba_pose/export_train_data_path": "/tmp/mamba_pose_m3dgr_unset.csv"
+
+    "mamba_pose/max_rotation_correction_rad": 0.10
+    "mamba_pose/max_translation_correction_m": 0.20
+    "mamba_pose/reject_non_finite_output": true
+    "mamba_pose/reject_oversized_output": false

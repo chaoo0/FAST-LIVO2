@@ -1,236 +1,66 @@
-# AGENTS.md
-
-## Project Scope
-
-This repository is currently being used for the **FAST-LIVO2 + MambaPose** research prototype.
-
-The current main line of work is:
-
-> **Innovation Point 1: Mamba-based temporal pose compensation inside FAST-LIVO2.**
-
-Do not restart the project design from scratch. Do not expand into the later innovation points unless explicitly requested.
-
-Before starting any task in this repository, read:
-
-```text
-mamba_pose_project_context.md
-```
-
-That file contains the current project state, verified results, key files, build commands, testing commands, and current next task.
-
----
-
-## Current Main Objective
-
-The current objective is not to redesign FAST-LIVO2. The objective is to continue from the existing MambaPose engineering prototype:
-
-```text
-FAST-LIVO2 LIO state estimation
-        ↓
-PoseCompensator
-        ↓
-history sequence features
-        ↓
-ONNX Runtime backend
-        ↓
-6D pose correction
-        ↓
-safety layer
-        ↓
-pose compensation path
-```
-
-The ONNX Runtime engineering loop has already been verified with normal / clamp / reject tests, and the same capability has now been synced to the MID360 launch flow.
-
-The current offline data-preparation stage is:
-
-> Keep the FAST-LIVO2 C++ main flow stable, use the existing offline scripts to clean exported CSV, interpolate short timestamp gaps, build fixed-length sequences, compute feature normalization statistics, preserve the stationary `static_zero` baseline for runtime-loop validation, and now train the first dynamic `pseudo_smooth_reference` baseline plus raw-input ONNX on top of the same X-side pipeline.
-
-After every code-development or script-development task, always sync the relevant project Markdown documents before ending the task.
-
----
-
-## Repository / Environment
-
-- Repository: `chaoo0/FAST-LIVO2`
-- Local package path: `/home/liu/fast_livo2/src/FAST-LIVO2`
-- Workspace root: `/home/liu/fast_livo2`
-- ROS version: ROS2 Humble
-- ROS package name: `fast_livo`
-- Build system: `colcon`
-- Current main launch file: `launch/mapping_mid360.launch.py`
-- ONNX Runtime root: `/opt/onnxruntime`
-
-Current MID360 launch arguments:
-
-```text
-use_rviz
-mamba_pose_params_file
-play_bag
-bag_path
-bag_loop
-bag_clock
-```
-
-Default rosbag path:
-
-```text
-/home/liu/rosbags/mid360_fastlivo_mamba_20260519_211645
-```
-
-Default build command:
-
-```bash
-cd /home/liu/fast_livo2
-source /opt/ros/humble/setup.bash
-
-colcon build --symlink-install --packages-select fast_livo \
-  --cmake-args \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DENABLE_ONNXRUNTIME=ON \
-  -DONNXRUNTIME_ROOT=/opt/onnxruntime
-
-source /home/liu/fast_livo2/install/setup.bash
-```
-
----
-
-## Do Not Modify Without Explicit Request
-
-Do not modify these files unless the user explicitly asks and the reason is clear:
-
-```text
-src/voxel_map.cpp
-include/voxel_map.h
-src/vio.cpp
-include/vio.h
-```
-
-Also avoid modifying these unless the current task truly requires it:
-
-```text
-src/pose_compensator.cpp
-include/pose_compensator.h
-src/LIVMapper.cpp
-include/LIVMapper.h
-CMakeLists.txt
-launch/mapping_avia.launch.py
-```
-
-The ONNX Runtime backend, safety layer, and PoseCompensator inference path have already passed tests. Do not refactor them unnecessarily.
-
----
-
-## Current Expected Behavior
-
-The following are already verified:
-
-- MambaPose parameters load through ROS2 YAML.
-- `PoseCompensator` enters the `handleLIO()` path.
-- ONNX Runtime C++ is found by CMake.
-- `fastlivo_mapping` links to `libonnxruntime.so.1.18.1`.
-- ONNX backend runs successfully.
-- normal / clamp / reject safety tests pass on the validated launch flow.
-- The compensation chain is verified through:
-  `handleLIO() -> StateEstimation() -> PoseCompensator -> history sequence -> ONNX Runtime backend -> 6D correction -> safety layer -> derived data rebuild -> UpdateVoxelMap()`
-- training data CSV export works.
-- `scripts/analyze_mamba_pose_train_data.py` is already implemented.
-- `scripts/interpolate_mamba_pose_time_gaps.py` is already implemented.
-- `scripts/build_mamba_pose_sequences.py` is already implemented.
-- `scripts/compute_mamba_pose_feature_norm.py` is already implemented.
-- `scripts/build_mamba_pose_static_zero_label_dataset.py` is already implemented.
-- `scripts/train_mamba_pose_static_zero.py` is already implemented.
-- `scripts/export_static_zero_mamba_pose_raw_input_onnx.py` is already implemented.
-- `scripts/build_mamba_pose_pseudo_label_dataset.py` is already implemented.
-- `scripts/train_mamba_pose_pseudo_label.py` is already implemented.
-
-Current generated CSV:
-
-```text
-/home/liu/fast_livo2/src/FAST-LIVO2/Log/mamba_pose_train_data.csv
-```
-
-Formal export configuration:
-
-```text
-config/mamba_pose_train_export_dummy.yaml
-```
-
-Use that file for real training-data export so the FAST-LIVO2 state history is not polluted by ONNX test corrections.
-
-Test-only YAML files:
-
-```text
-config/mamba_pose_onnx_normal_test.yaml
-config/mamba_pose_onnx_safety_test.yaml
-config/mamba_pose_onnx_reject_test.yaml
-```
-
-These are only for ONNX / safety validation and should not be used for formal training-data export.
-
-Runtime observe-only YAML:
-
-```text
-config/mamba_pose_static_zero_runtime_observe_only.yaml
-```
-
-Use this file when validating the raw-input `static_zero` ONNX model inside FAST-LIVO2 without writing the predicted correction back into `_state`.
-
-Current next work:
-
-```text
-The observe-only runtime verification with Log/models/static_zero_mamba_pose_raw_input.onnx has passed, the 0.5s pseudo-label baseline is now trained, and the next step is FAST-LIVO2 observe-only runtime validation with Log/models/pseudo_smooth_mamba_pose_raw_input.onnx.
-```
-
-The current offline artifacts now include a `static_zero` baseline label dataset, but that label is only valid for the current stationary rosbag and does not define the final real correction target y.
-The current dynamic-data stage additionally uses `scripts/build_mamba_pose_pseudo_label_dataset.py` to build `label_type=pseudo_smooth_reference`, where each sequence label is aligned to the sequence last frame and computed against a same-segment smoothed reference trajectory.
-The current pseudo-label baseline training stage uses `scripts/train_mamba_pose_pseudo_label.py` with the selected 0.5s dataset and exports:
-
-- `Log/models/pseudo_smooth_mamba_pose.pt`
-- `Log/models/pseudo_smooth_mamba_pose.onnx`
-- `Log/models/pseudo_smooth_mamba_pose_raw_input.onnx`
-
-The raw-input ONNX model is the one intended for FAST-LIVO2 runtime observe-only validation. The normalized-input ONNX model is only for offline inference / export verification.
-The raw-input ONNX wrapper is required because FAST-LIVO2 currently sends raw basic18 features to the ONNX backend, not pre-normalized features.
-The runtime path now separates:
-
-- `mamba_pose/enabled`: enable history buffering, ready-state checks, ONNX inference, and MambaPose debug logs
-- `mamba_pose/apply_correction_en`: control whether the compensated state is actually written back into `_state` and `voxelmap_manager->state_`
-
-Default for `mamba_pose/apply_correction_en` is `false`, so new runtime validation should start in observe-only mode.
-The current runtime success criterion for the stationary `static_zero` baseline is:
-
-- `apply_correction_en=false`
-- `applied=false`
-- ONNX inference still succeeds and logs `raw` / `safe`
-- FAST-LIVO2 state and map stay stable
-
-The current `static_zero` baseline still must not be used for true closed-loop correction application. It only validates the runtime inference path in observe-only mode.
-
----
-
-## If Modifying Code
-
-If any code is modified, always output:
-
-1. Files changed.
-2. Why each file was changed.
-3. Whether core SLAM files were touched.
-4. Build command.
-5. Runtime verification command.
-6. Expected logs or outputs.
-
-For C++ changes, always compile with:
-
-```bash
-cd /home/liu/fast_livo2
-source /opt/ros/humble/setup.bash
-
-colcon build --symlink-install --packages-select fast_livo \
-  --cmake-args \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DENABLE_ONNXRUNTIME=ON \
-  -DONNXRUNTIME_ROOT=/opt/onnxruntime
-```
-
-For the current documentation-sync and offline data-preparation tasks, no C++ compilation should be needed.
+# FAST-LIVO2 + MambaPose Agent Guide
+
+## Scope and mandatory reading
+
+This repository is the FAST-LIVO2 + MambaPose research prototype. Work only on
+Innovation Point 1: temporal pose compensation. Do not restart FAST-LIVO2 or
+expand to later innovation points unless explicitly requested.
+
+Before any task, read [mamba_pose_project_context.md](mamba_pose_project_context.md).
+For M3DGR work, also read
+[Supplementary/mamba_pose_m3dgr_gt_quickstart.md](Supplementary/mamba_pose_m3dgr_gt_quickstart.md).
+
+## Current state and next action
+
+The MID360 ONNX chain and normal/clamp/reject safety tests are verified.
+`static_zero` and `pseudo_smooth_reference` are engineering baselines only;
+both must remain observe-only.
+
+The active work is M3DGR indoor Mocap GT. Acquire and SHA256-verify exactly
+the frozen `Varying-illu02` Pilot bag, convert/audit it, then run the M3DGR
+LIO export. Its alignment must remain `alignment_candidate` until the physical
+Mocap rigid-body frame is externally confirmed. Do not start trusted-GT
+training or GT-model state writeback before that gate passes.
+
+## Runtime and data invariants
+
+- `mamba_pose/enabled` controls buffering and inference; `apply_correction_en`
+  controls state writeback. The default and validation mode is `false`.
+- FAST-LIVO2 sends raw basic18 features to ONNX. Runtime models must be the
+  `*_raw_input.onnx` variants.
+- Formal M3DGR export uses dummy backend, `apply_correction_en=false`, frozen
+  splits in `config/m3dgr_dataset_manifest.yaml`, and train-only normalization.
+- M3DGR labels are right perturbations: `Log_SE3(inv(T_est) * T_ref)` in
+  `[delta_theta, delta_rho]`. Do not filter valid labels with runtime limits.
+- The legacy C++ apply path uses Euler/world-translation semantics and is not
+  compatible with these labels; right-SE(3) models remain observe-only.
+
+## Repository and commands
+
+- Package: `fast_livo`; workspace: `/home/liu/fast_livo2`; ROS 2 Humble.
+- Main MID360 launch: `launch/mapping_mid360.launch.py`.
+- M3DGR launch: `launch/mapping_m3dgr_lio.launch.py`.
+- Latest MID360 artifact root:
+  `Log/runs/mid360_fastlivo_mamba_20260605_161447`.
+- Build C++ changes with:
+
+  ```bash
+  cd /home/liu/fast_livo2
+  source /opt/ros/humble/setup.bash
+  colcon build --symlink-install --packages-select fast_livo \
+    --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DENABLE_ONNXRUNTIME=ON -DONNXRUNTIME_ROOT=/opt/onnxruntime
+  ```
+
+## Change constraints
+
+Do not modify without an explicit request: `src/voxel_map.cpp`,
+`include/voxel_map.h`, `src/vio.cpp`, or `include/vio.h`.
+
+Avoid modifying `src/pose_compensator.cpp`, `include/pose_compensator.h`,
+`src/LIVMapper.cpp`, `include/LIVMapper.h`, `CMakeLists.txt`, and
+`launch/mapping_avia.launch.py` unless the task requires it.
+
+After code or script changes, sync the relevant Markdown document and report
+files changed, core-SLAM impact, build command, runtime/test command, and
+expected output.

@@ -1,0 +1,13 @@
+# Candidate profile for training-sequence-only covariance comparison.
+# Do not tune or select this profile using validation/test sequences.
+# MID360 averages from M3DGR calibration.md:
+#   gyr_n = 1.3254540721802960e-03 rad/s/sqrt(Hz)
+#   acc_n = 1.1472382386578356e-02 m/s^2/sqrt(Hz)
+# The current FAST-LIVO2 implementation consumes scalar diagonal covariance
+# scales, so this candidate uses density squared. It is not pre-declared the
+# correct profile; compare against config/m3dgr_mid360_lio.yaml on train only.
+/**:
+  ros__parameters:
+    imu:
+      gyr_cov: 1.756828497459329e-06
+      acc_cov: 1.316155576238733e-04

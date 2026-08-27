@@ -1,0 +1,98 @@
+/**:
+  ros__parameters:
+    common:
+      img_topic: "/camera/color/image_raw"
+      lid_topic: "/livox/mid360/lidar"
+      imu_topic: "/livox/mid360/imu"
+      img_en: 0
+      lidar_en: 1
+      ros_driver_bug_fix: false
+
+    # M3DGR calibration.md defines p_target = R * p_source + T.
+    # These values are the published mid360 -> mid360_imu transform.
+    extrin_calib:
+      cam_model: Pinhole
+      extrinsic_T: [-0.011, -0.02329, 0.04412]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+      # Camera is disabled in the first LIO stage; valid placeholders keep the
+      # existing VIO manager initialization path unchanged.
+      Rcl: [1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0]
+      Pcl: [0.0, 0.0, 0.0]
+
+    time_offset:
+      imu_time_offset: 0.0
+      img_time_offset: 0.0
+      exposure_time_init: 0.0
+
+    preprocess:
+      point_filter_num: 1
+      filter_size_surf: 0.01
+      lidar_type: 1
+      scan_line: 4
+      scan_rate: 10
+      blind: 0.5
+      feature_extract_enabled: false
+
+    vio:
+      max_iterations: 5
+      outlier_threshold: 1000
+      img_point_cov: 100
+      grid_size: 5
+      grid_n_height: 17
+      patch_size: 8
+      patch_pyrimid_level: 4
+      normal_en: true
+      raycast_en: false
+      inverse_composition_en: false
+      exposure_estimate_en: true
+      inv_expo_cov: 0.1
+
+    # Baseline profile. Keep this separate from the Kalibr-density-squared
+    # candidate and choose/freeze only from training-sequence ATE/RPE.
+    imu:
+      imu_en: true
+      imu_int_frame: 30
+      acc_cov: 0.5
+      gyr_cov: 0.3
+      gravity_est_en: true
+      ba_bg_est_en: true
+
+    lio:
+      max_iterations: 5
+      dept_err: 0.02
+      beam_err: 0.05
+      min_eigen_value: 0.0025
+      voxel_size: 0.5
+      max_layer: 2
+      max_points_num: 50
+      layer_init_num: [5, 5, 5, 5, 5]
+
+    local_map:
+      map_sliding_en: false
+      half_map_size: 100
+      sliding_thresh: 8.0
+
+    uav:
+      imu_rate_odom: false
+      gravity_align_en: true
+
+    publish:
+      dense_map_en: true
+      pub_effect_point_en: false
+      pub_plane_en: false
+      pub_scan_num: 1
+      blind_rgb_points: 0.0
+
+    evo:
+      seq_name: "m3dgr_lio"
+      pose_output_en: false
+
+    pcd_save:
+      pcd_save_en: false
+      colmap_output_en: false
+      filter_size_pcd: 0.15
+      interval: -1

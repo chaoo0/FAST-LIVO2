@@ -1,1201 +1,139 @@
-# FAST-LIVO2 + MambaPose Project Context
+# FAST-LIVO2 + MambaPose: Current State Snapshot
 
-## 1. Project Identity
+Updated: 2026-08-27. This is the sole current-state document. Historical
+baseline details live in
+[Supplementary/mamba_pose_baseline_history.md](Supplementary/mamba_pose_baseline_history.md);
+procedure details live in the relevant quickstart/checklist.
 
-This repository is being used for the current research prototype:
+## Goal and boundaries
 
-> **FAST-LIVO2 + MambaPose temporal pose compensation**
-
-Repository:
-
-```text
-chaoo0/FAST-LIVO2
-```
-
-Local paths:
+The project validates and eventually trains a temporal MambaPose 6DoF
+compensator inside FAST-LIVO2:
 
 ```text
-Workspace root:
-  /home/liu/fast_livo2
-
-Package path:
-  /home/liu/fast_livo2/src/FAST-LIVO2
+LIO state -> PoseCompensator -> basic18 history -> ONNX -> 6D correction
+          -> safety gate -> derived-state rebuild -> voxel-map update
 ```
 
-Environment:
+Only Innovation Point 1 is in scope. Do not redesign FAST-LIVO2 or add later
+map/loop-closure innovation points.
+
+## Verified engineering baseline
+
+- ROS 2 Humble package `fast_livo` builds with ONNX Runtime at
+  `/opt/onnxruntime`.
+- The MID360 path loads YAML, buffers history, runs ONNX inference, applies the
+  safety layer, rebuilds derived state, and reaches map update.
+- MID360 normal, clamp, and reject safety cases are verified.
+- Data export and offline tooling are implemented: CSV clean/interpolate,
+  T=10 sequence construction, basic18 normalization, static-zero and
+  pseudo-smooth baseline data/train/export paths.
+- Runtime defaults to observe-only: `mamba_pose/apply_correction_en=false`.
+  Raw-input ONNX wrappers are required because C++ supplies raw basic18 input.
+
+The existing `static_zero` and `pseudo_smooth_reference` models prove the
+engineering interface only. They are not trusted dynamic supervision and must
+not be used for closed-loop correction.
+
+## Latest usable MID360 artifact
+
+The current dynamic reference run is:
 
 ```text
-ROS version:
-  ROS2 Humble
-
-Package name:
-  fast_livo
-
-Build tool:
-  colcon
+rosbag: /home/liu/data_sda5/rosbags/mid360_fastlivo_mamba_20260605_161447
+artifacts: Log/runs/mid360_fastlivo_mamba_20260605_161447
 ```
 
-Current ONNX Runtime path:
+Verified results:
 
 ```text
-/opt/onnxruntime
+raw CSV rows: 5127
+clean rows: 5117
+T=10 windows: 5108
+segments: 1
+raw basic18 non-finite values: 0 after cleaning
 ```
 
-Current main launch file:
+The run directory contains the cleaned/interpolated CSVs, sequence and
+normalization NPZs, 0.5/1.0/2.0-second pseudo-label variants, and the selected
+0.5-second FlattenMLP checkpoint plus normalized/raw-input ONNX exports.
 
-```text
-/home/liu/fast_livo2/src/FAST-LIVO2/launch/mapping_mid360.launch.py
-```
+Use run-specific paths in new commands. Do not use test YAMLs for formal CSV
+export; use `config/mamba_pose_train_export_20260605_161447.yaml` for the
+current MID360 run or `config/mamba_pose_train_export_dummy.yaml` as the
+generic export template.
 
-Current training CSV path:
+## M3DGR trusted-GT status
 
-```text
-/home/liu/fast_livo2/src/FAST-LIVO2/Log/mamba_pose_train_data.csv
-```
+M3DGR is now the intended supervision source, using MID360 + built-in IMU;
+D435i is deferred. Implemented, regression-tested components include:
 
----
+- frozen split/checksum manifest and fail-closed artifact paths;
+- ROS1 verification, ROS2 conversion, topic/point-time audit, and optional
+  separate Livox-driver2 compatibility rewrite;
+- M3DGR LIO launch with image disabled, dummy backend, per-run export, and
+  `current`/`kalibr_variance` covariance profiles;
+- TUM audit, timestamp offset search, interpolation, world alignment,
+  hand-eye consistency estimation, and provenance reports;
+- right-SE(3) dataset assembly with formal trust gate, bag isolation,
+  train-only normalization, and large-label preservation.
 
-## 2. Current Scope
+On 2026-08-08, the package/launch smoke checks and all six synthetic M3DGR
+regression tests passed. The public `Varying-illu02.txt` GT passed SHA256,
+strict timestamp, and quaternion checks (43,550 poses over 146.49 s).
 
-The project is still focused only on:
+No real M3DGR Pilot bag, converted bag, LIO CSV, alignment report, or formal
+dataset exists locally. The physical definition of the Mocap rigid body is
+also unconfirmed. Therefore no artifact is eligible as `trusted_gt`.
 
-> **Innovation Point 1: Mamba-based temporal pose compensation inside FAST-LIVO2**
+## Current single next task
 
-Do not restart the design from scratch.
+1. Review the external terms and obtain exactly the manifest-frozen
+   `Varying-illu02` bag.
+2. SHA256-verify, convert, and audit it using the M3DGR quickstart.
+3. Run `mapping_m3dgr_lio.launch.py` with `covariance_profile:=current`, dummy
+   backend, and observe-only output to create the first real LIO CSV.
+4. Audit/align it against Mocap GT, retaining only `alignment_candidate` until
+   external confirmation of the rigid-body physical frame.
 
-Do not expand into:
+Do not train trusted GT, freeze a covariance profile, or modify state-writeback
+semantics before the gates in the M3DGR quickstart have passed.
 
-- point cloud / local map temporal feature enhancement
-- implicit loop closure / global memory
+## Critical contracts
 
-unless explicitly requested.
+- M3DGR target: `xi = Log_SE3(inv(T_est) * T_ref)` ordered as
+  `[delta_theta, delta_rho]`.
+- Valid large training errors remain in the dataset; runtime safety limits do
+  not filter them.
+- Formal assembly requires `trusted_gt`, one confirmed frame convention and
+  extrinsic, stable offsets, frozen split membership, and train-only feature
+  statistics.
+- Current `applyCorrection()` uses legacy Euler plus world-frame translation;
+  it is not equivalent to right-SE(3). GT ONNX models must stay observe-only
+  until that contract is deliberately migrated and tested.
 
-Current intended runtime path:
+## Authority map
 
-```text
-FAST-LIVO2 handleLIO()
-        ↓
-StateEstimation()
-        ↓
-PoseCompensator
-        ↓
-history sequence
-        ↓
-ONNX Runtime backend
-        ↓
-6D correction
-        ↓
-safety layer
-        ↓
-derived data rebuild
-        ↓
-UpdateVoxelMap()
-```
+| Need | Authoritative source |
+| --- | --- |
+| Agent constraints and immediate next action | `AGENTS.md` |
+| Current state and artifact baseline | This file |
+| M3DGR acquisition through formal assembly | `Supplementary/mamba_pose_m3dgr_gt_quickstart.md` |
+| MID360 runtime diagnostics | `Supplementary/mamba_pose_debug_checklist.md` |
+| ONNX input/output interface | `Supplementary/mamba_pose_onnx_quickstart.md` |
+| Safety test procedure | `Supplementary/mamba_pose_safety_test.md` |
+| Baseline experiment history | `Supplementary/mamba_pose_baseline_history.md` |
 
-This engineering chain has already been verified.
-
----
-
-## 3. Current Main Launch
-
-The current main launch is:
+## Key paths
 
 ```text
 launch/mapping_mid360.launch.py
-```
-
-It already supports:
-
-- MID360 parameter loading
-- MambaPose parameter loading
-- optional RViz
-- automatic rosbag playback
-
-Current launch arguments:
-
-```text
-use_rviz
-mamba_pose_params_file
-play_bag
-bag_path
-bag_loop
-bag_clock
-```
-
-Argument meaning:
-
-- `play_bag`: whether to automatically run `ros2 bag play`
-- `bag_path`: rosbag path to play
-- `bag_loop`: whether to add `--loop`
-- `bag_clock`: whether to add `--clock`
-
-Current default bag path:
-
-```text
-/home/liu/rosbags/mid360_fastlivo_mamba_20260519_211645
-```
-
----
-
-## 4. Verified Engineering State
-
-The following items are already verified:
-
-- `PoseCompensator` enters the `handleLIO()` path.
-- MambaPose parameters load correctly from ROS2 YAML.
-- ONNX Runtime C++ is found by CMake.
-- `fastlivo_mapping` links to `libonnxruntime.so.1.18.1`.
-- the real ONNX backend runs successfully
-- the safety layer behavior is correct
-- derived data rebuild after compensation is active
-- training CSV export works
-
-Verified runtime chain:
-
-```text
-FAST-LIVO2 handleLIO()
-→ StateEstimation()
-→ PoseCompensator
-→ history sequence
-→ ONNX Runtime backend
-→ 6D correction
-→ safety layer
-→ derived data rebuild
-→ UpdateVoxelMap()
-```
-
----
-
-## 5. ONNX Runtime State
-
-ONNX Runtime C++ is installed at:
-
-```text
-/opt/onnxruntime
-```
-
-Verified files:
-
-```text
-/opt/onnxruntime/include/onnxruntime_cxx_api.h
-/opt/onnxruntime/lib/libonnxruntime.so
-```
-
-Verified CMake state:
-
-```text
-ENABLE_ONNXRUNTIME:BOOL=ON
-ONNXRUNTIME_INCLUDE_DIR:PATH=/opt/onnxruntime/include
-ONNXRUNTIME_LIBRARY:FILEPATH=/opt/onnxruntime/lib/libonnxruntime.so
-ONNXRUNTIME_ROOT:PATH=/opt/onnxruntime
-```
-
-Verified runtime link:
-
-```text
-libonnxruntime.so.1.18.1 => /opt/onnxruntime/lib/libonnxruntime.so.1.18.1
-```
-
----
-
-## 6. Current Test YAML Rules
-
-The ONNX / safety test YAML files are only for validation.
-
-### 6.1 Test-Only YAML
-
-`config/mamba_pose_onnx_normal_test.yaml`
-
-- backend: `onnx`
-- model: `small_nonzero_mamba_pose.onnx`
-- fixed output: `[0.01, 0, 0, 0.01, 0, 0]`
-- use only for normal-path testing
-
-`config/mamba_pose_onnx_safety_test.yaml`
-
-- backend: `onnx`
-- model: `oversized_mamba_pose.onnx`
-- fixed output: `[0.3, 0, 0, 0.5, 0, 0]`
-- use only for clamp-path testing
-
-`config/mamba_pose_onnx_reject_test.yaml`
-
-- backend: `onnx`
-- model: `oversized_mamba_pose.onnx`
-- `reject_oversized_output=true`
-- use only for reject-path testing
-
-These three files are **not** for formal training-data export.
-
-### 6.2 Formal Export YAML
-
-Formal training-data export should use:
-
-```text
-config/mamba_pose_train_export_dummy.yaml
-```
-
-Required settings:
-
-```text
-mamba_pose/enabled=true
-mamba_pose/backend_type=dummy
-mamba_pose/model_path=""
-mamba_pose/history_len=10
-mamba_pose/min_ready_frames=10
-mamba_pose/export_train_data_en=true
-mamba_pose/export_train_data_path=/home/liu/fast_livo2/src/FAST-LIVO2/Log/mamba_pose_train_data.csv
-```
-
-Reason:
-
-> When exporting formal training data, do not use ONNX test models, otherwise the fixed small or oversized corrections will contaminate the original FAST-LIVO2 state history.
-
----
-
-## 7. Verified ONNX / Safety Results
-
-The normal / clamp / reject tests were first validated in the Avia flow and have now been synchronized to the MID360 launch flow.
-
-MID360 normal test has been explicitly confirmed with logs including:
-
-```text
-requested_backend=onnx
-active_backend=onnx
-model_loaded=true
-session_ready=true
-io_name_ready=true
-inference_success=true
-fallback=false
-backend_status=io_name_ready
-backend_error=none
-inference_status=inference_success
-seq_len=10
-feature_dim=18
-flat_input_len=180
-output_dim=6
-clamped=false
-rejected=false
-reject_reason=none
-raw=[0.01, 0, 0, 0.01, 0, 0]
-safe=[0.01, 0, 0, 0.01, 0, 0]
-```
-
-Clamp-path expectation and verified behavior:
-
-```text
-raw=[0.3, 0, 0, 0.5, 0, 0]
-safe=[0.1, 0, 0, 0.2, 0, 0]
-clamped=true
-rejected=false
-reject_reason=none
-```
-
-Reject-path expectation and verified behavior:
-
-```text
-raw=[0.3, 0, 0, 0.5, 0, 0]
-safe=[0.1, 0, 0, 0.2, 0, 0]
-clamped=true
-rejected=true
-reject_reason=oversized_output
-```
-
-Current conclusion:
-
-```text
-MID360 normal / clamp / reject capability is considered verified.
-```
-
----
-
-## 8. Training Data Export State
-
-Current exported CSV:
-
-```text
-Log/mamba_pose_train_data.csv
-```
-
-CSV columns:
-
-```text
-timestamp,
-pos_x,pos_y,pos_z,
-rot_x,rot_y,rot_z,rot_w,
-vel_x,vel_y,vel_z,
-bias_g_x,bias_g_y,bias_g_z,
-bias_a_x,bias_a_y,bias_a_z,
-effective_feature_num,avg_residual,history_size,ready_flag,
-gt_pos_x,gt_pos_y,gt_pos_z,
-gt_rot_x,gt_rot_y,gt_rot_z,gt_rot_w
-```
-
-Notes:
-
-- `gt_*` fields are allowed to be `nan`
-- `gt_*` fields do not participate in the current cleaning filter
-- do not use stale sample-count notes from older documents as the current truth
-
----
-
-## 9. Completed Offline Data Scripts
-
-### 9.1 CSV Analysis / Cleaning
-
-Implemented script:
-
-```text
-scripts/analyze_mamba_pose_train_data.py
-```
-
-Purpose:
-
-- read `Log/mamba_pose_train_data.csv`
-- filter abnormal rows
-- output `Log/mamba_pose_train_data_clean.csv`
-- output `Log/mamba_pose_train_data_report.txt`
-
-Current verified result:
-
-```text
-raw total_rows = 1311
-cleaned_row_count = 1302
-```
-
-Current cleaning rules:
-
-- `ready_flag == 1`
-- `history_size >= 10`
-- `effective_feature_num > 0`
-- `avg_residual >= 0`
-- no `NaN` / `Inf` in input feature fields
-- `gt_*` may be `NaN` and must not be used for filtering
-
-### 9.2 Short-Gap Interpolation
-
-Implemented script:
-
-```text
-scripts/interpolate_mamba_pose_time_gaps.py
-```
-
-Purpose:
-
-- read `Log/mamba_pose_train_data_clean.csv`
-- interpolate only short timestamp gaps
-- output `Log/mamba_pose_train_data_interpolated.csv`
-- output `Log/mamba_pose_train_data_interpolated_report.txt`
-
-Current verified interpolation result:
-
-```text
-original_rows = 1302
-output_rows = 1307
-inserted_rows = 5
-interpolatable_gap_count = 2
-actually_interpolated_gap_count = 2
-max_gap_before = 0.299603
-max_gap_after = 0.100726
-basic18_nan_or_inf_count = 0
-```
-
-Key behavior:
-
-- do not interpolate `dt <= 0`
-- do not blindly average all discontinuities
-- only interpolate `max_continuous_gap < dt <= max_interpolate_gap`
-- keep long gaps as true segment boundaries
-- use normalized quaternion interpolation
-- do not generate `y` labels
-- do not use `gt_*`
-
-### 9.3 Fixed-Length Sequence Builder
-
-Implemented script:
-
-```text
-scripts/build_mamba_pose_sequences.py
-```
-
-Purpose:
-
-- read a clean or interpolated CSV
-- split segments using timestamp continuity
-- build sliding windows with `T=10`
-- output sequence NPZ and TXT report
-
-Current basic18 feature order must remain:
-
-```text
-pos_x,pos_y,pos_z,
-rot_x,rot_y,rot_z,rot_w,
-vel_x,vel_y,vel_z,
-bias_g_x,bias_g_y,bias_g_z,
-bias_a_x,bias_a_y,bias_a_z,
-effective_feature_num,
-avg_residual
-```
-
-Earlier sequence comparison on the first short test export:
-
-```text
-clean baseline:
-  X shape = [1281, 10, 18]
-  skipped_by_time_gap = 12
-  segment_count = 3
-
-interpolated:
-  X shape = [1298, 10, 18]
-  skipped_by_time_gap = 0
-  segment_count = 1
-```
-
-Current main sequence artifact:
-
-```text
-Log/mamba_pose_sequences_T10_interpolated.npz
-Log/mamba_pose_sequences_T10_interpolated_report.txt
-```
-
-### 9.4 Feature Normalization Statistics
-
-Implemented script:
-
-```text
-scripts/compute_mamba_pose_feature_norm.py
-```
-
-Purpose:
-
-- read `Log/mamba_pose_sequences_T10_interpolated.npz`
-- compute per-feature normalization statistics for basic18
-- output `Log/mamba_pose_feature_norm_T10_interpolated.npz`
-- output `Log/mamba_pose_feature_norm_T10_interpolated_report.txt`
-- optionally output `Log/mamba_pose_sequences_T10_interpolated_normalized.npz`
-
-Current verified result on the current dynamic export:
-
-```text
-input X shape = [9741, 10, 18]
-X_global_nan_count = 0
-X_global_inf_count = 0
-std_lt_epsilon_features = none
-normalized_feature_mean_range ≈ [0, 0]
-normalized_feature_std_range ≈ [1, 1]
-```
-
-Important note:
-
-> Later training and ONNX-side preprocessing must reuse the same `mean` and `std_safe` saved by the norm NPZ.
-
-### 9.5 Static Zero-Label Baseline Dataset
-
-Implemented script:
-
-```text
-scripts/build_mamba_pose_static_zero_label_dataset.py
-```
-
-Purpose:
-
-- read `Log/mamba_pose_sequences_T10_interpolated_normalized.npz`
-- read `Log/mamba_pose_feature_norm_T10_interpolated.npz`
-- build a first `static_zero` label dataset
-- output `Log/mamba_pose_static_zero_label_dataset_T10.npz`
-- output `Log/mamba_pose_static_zero_label_dataset_T10_report.txt`
-
-Earlier stationary-baseline verified result:
-
-```text
-X_normalized shape = [9919, 10, 18]
-y shape = [9919, 6]
-y is all zero
-X NaN count = 0
-X Inf count = 0
-y NaN count = 0
-y Inf count = 0
-label_type = static_zero
-```
-
-Current label definition:
-
-```text
-y = [d_roll, d_pitch, d_yaw, d_tx, d_ty, d_tz] = [0, 0, 0, 0, 0, 0]
-```
-
-Important limitation:
-
-> This is only a stationary-rosbag no-op baseline label. It is useful for validating training, dataloader, loss, ONNX export, and FAST-LIVO2 inference-loop integration later, but it is not the final real pose correction label and cannot prove dynamic compensation ability.
-
-### 9.6 Static Zero-Label No-Op Baseline Training
-
-Implemented script:
-
-```text
-scripts/train_mamba_pose_static_zero.py
-```
-
-Purpose:
-
-- read `Log/mamba_pose_static_zero_label_dataset_T10.npz`
-- train a small `flatten + MLP -> [6]` temporal baseline
-- save best checkpoint
-- export a FAST-LIVO2-compatible ONNX model
-- run ONNX smoke test when `onnx` and `onnxruntime` are available
-
-Current output files:
-
-```text
-Log/models/static_zero_mamba_pose.pt
-Log/models/static_zero_mamba_pose.onnx
-Log/models/static_zero_mamba_pose_train_log.csv
-Log/models/static_zero_mamba_pose_train_report.txt
-```
-
-Earlier stationary-baseline verified training result:
-
-```text
-dataset X shape = [9919, 10, 18]
-dataset y shape = [9919, 6]
-train_size = 7935
-val_size = 1984
-epochs = 30
-batch_size = 128
-best_val_loss = 6.59830856963503e-07
-final_val_loss = 6.59830856963503e-07
-pred_abs_max = 0.001578
-pred_abs_mean = 0.000474
-```
-
-Current verified ONNX result:
-
-```text
-onnx_export_status = exported
-onnx_smoke_test_status = passed
-onnx_input_name = input
-onnx_output_name = output
-onnx_input_shape = [10, 18]
-onnx_output_shape = [6]
-zero_input_output_abs_max = 0.008137
-zero_input_output_abs_mean = 0.003191
-```
-
-Current interpretation:
-
-> The no-op baseline training and ONNX export loop is now verified end to end, but only for the current `static_zero` target. It validates the training / export / runtime-interface loop, not real dynamic pose correction ability.
-
-### 9.7 Runtime-Ready Raw-Input ONNX Export
-
-Implemented script:
-
-```text
-scripts/export_static_zero_mamba_pose_raw_input_onnx.py
-```
-
-Purpose:
-
-- load `Log/models/static_zero_mamba_pose.pt`
-- load `Log/mamba_pose_feature_norm_T10_interpolated.npz`
-- embed `mean` / `std_safe` into an ONNX export wrapper
-- export a raw-input ONNX model compatible with the current FAST-LIVO2 C++ backend
-- compare raw-input ONNX(raw X) against normalized-input ONNX(X_normalized)
-
-Current output files:
-
-```text
-Log/models/static_zero_mamba_pose_raw_input.onnx
-Log/models/static_zero_mamba_pose_raw_input_onnx_report.txt
-```
-
-Current verified result:
-
-```text
-input shape = [10, 18]
-output shape = [6]
-onnx_checker_status = passed
-onnxruntime_smoke_test_status = passed
-raw_onnx_output_abs_max = 0.000628
-raw_onnx_output_abs_mean = 0.000308
-normalized_onnx_output_abs_max = 0.000624
-normalized_onnx_output_abs_mean = 0.000304
-output_diff_abs_max_between_raw_and_normalized_onnx = 0.000010
-output_diff_abs_mean_between_raw_and_normalized_onnx = 0.000004
-```
-
-Current interpretation:
-
-> `static_zero_mamba_pose_raw_input.onnx` is the correct model to connect back into FAST-LIVO2, because the current C++ ONNX path sends raw basic18 features, not normalized features.
-
-### 9.8 Runtime Observe-Only Safety Switch
-
-Current runtime finding:
-
-> `static_zero_mamba_pose_raw_input.onnx` can now be loaded and inferred successfully inside FAST-LIVO2, but the current `static_zero` no-op baseline is not stable enough to be directly closed-loop applied to `_state`.
-
-Observed runtime problem:
-
-- ONNX loading and inference succeed
-- `raw` correction may start small and later drift to very large values
-- if `reject_oversized_output=false`, the safety layer only clamps to bounded `safe`
-- `rejected=false` still allows the clamped `safe` correction to be written back
-- this can push FAST-LIVO2 state and map far away even though the ONNX path itself is technically alive
-
-Minimal C++ fix now applied:
-
-- new runtime parameter: `mamba_pose/apply_correction_en`
-- compatible alias: `mamba_pose.apply_correction_en`
-- default value: `false`
-- modified files:
-  - `include/LIVMapper.h`
-  - `src/LIVMapper.cpp`
-- runtime observe-only config:
-  - `config/mamba_pose_static_zero_runtime_observe_only.yaml`
-
-Current runtime control split:
-
-- `mamba_pose/enabled=true` controls:
-  - history buffering
-  - ready-state checks
-  - `pose_compensator_.compensate(_state)`
-  - ONNX inference
-  - raw / safe / clamped / rejected debug logs
-- `mamba_pose/apply_correction_en=true` additionally allows:
-  - `_state = compensated_state`
-  - `voxelmap_manager->state_ = _state`
-
-Current behavior matrix:
-
-| `mamba_pose/enabled` | `mamba_pose/apply_correction_en` | Behavior |
-| --- | --- | --- |
-| `false` | `false` or `true` | MambaPose path stays off; no history, no inference, no correction logs |
-| `true` | `false` | observe-only mode; history and inference still run, logs still print, but corrected state is not written back |
-| `true` | `true` | previous full apply behavior; corrected state is written back to `_state` and `voxelmap_manager->state_` |
-
-Current debug fields now also include:
-
-```text
-applied=true/false
-apply_correction_en=true/false
-```
-
-Current interpretation:
-
-> The raw-input ONNX runtime path is now verified separately from the state-writeback path. This lets us observe unstable `static_zero` model outputs safely before enabling true correction application.
-
-Current verified observe-only runtime result:
-
-- `requested_backend=onnx`
-- `active_backend=onnx`
-- `model_loaded=true`
-- `session_ready=true`
-- `io_name_ready=true`
-- `inference_success=true`
-- `executed=true`
-- `apply_correction_en=false`
-- `applied=false`
-- `raw` / `safe` output are visible
-- FAST-LIVO2 point cloud no longer flies away in this mode
-
-Current interpretation update:
-
-> The observe-only runtime verification is now passed. The ONNX inference chain is live and can be monitored safely, but the current `static_zero` baseline is still not suitable for closed-loop correction writeback.
-
-### 9.9 Dynamic Pseudo Correction-Label Dataset
-
-Implemented script:
-
-```text
-scripts/build_mamba_pose_pseudo_label_dataset.py
-```
-
-Purpose:
-
-- read `Log/mamba_pose_train_data_interpolated.csv`
-- read `Log/mamba_pose_sequences_T10_interpolated_normalized.npz`
-- read `Log/mamba_pose_feature_norm_T10_interpolated.npz`
-- build a first dynamic pseudo correction-label dataset
-- output `Log/mamba_pose_pseudo_label_dataset_T10_smooth.npz`
-- output `Log/mamba_pose_pseudo_label_dataset_T10_smooth_report.txt`
-
-Smoothing definition:
-
-- default `smooth_window_sec = 1.0`
-- for target frame timestamp `t_i`, smooth only inside the same continuous segment
-- use the symmetric timestamp window `[t_i - 0.5, t_i + 0.5]`
-- position uses uniform averaging
-- rotation uses hemisphere-aligned quaternion averaging followed by normalization
-
-Label target definition:
-
-- each sequence label corresponds to the sequence last frame
-- `target_index = source_indices[n, -1]`
-- `target_timestamp = timestamps[n, -1]`
-
-Pseudo-label formula:
-
-```text
-d_t = p_ref - p_est
-d_R = R_est^T * R_ref
-y = [d_roll, d_pitch, d_yaw, d_tx, d_ty, d_tz]
-```
-
-where `d_R` is converted to roll / pitch / yaw.
-
-Current verified output files:
-
-```text
-Log/mamba_pose_pseudo_label_dataset_T10_smooth.npz
-Log/mamba_pose_pseudo_label_dataset_T10_smooth_report.txt
-```
-
-Current verified result:
-
-```text
-csv_rows = 9786
-original_sequence_count = 9741
-output_valid_sequence_count = 9597
-dropped_sequence_count = 144
-segment_count = 5
-average_neighbor_count = 14.971388
-source_index_out_of_range_count = 0
-timestamp_mismatch_count = 0
-dropped_by_invalid_reference_frame = 0
-dropped_by_nan_inf = 0
-dropped_by_rot_limit = 144
-dropped_by_trans_limit = 0
-kept_ratio = 98.52%
-y shape = [9597, 6]
-label_type = pseudo_smooth_reference
-```
-
-Current label-distribution snapshot:
-
-```text
-d_roll abs_max = 0.098149
-d_pitch abs_max = 0.099732
-d_yaw abs_max = 0.099712
-d_tx abs_max = 0.079342
-d_ty abs_max = 0.047032
-d_tz abs_max = 0.065165
-```
-
-Current interpretation:
-
-> This is the first dynamic pseudo-label dataset built on top of the existing X-side pipeline. It is not ground truth, but it is no longer the trivial all-zero stationary baseline.
-
-### 9.10 Pseudo-Label Baseline Training And ONNX Export
-
-Implemented script:
-
-```text
-scripts/train_mamba_pose_pseudo_label.py
-```
-
-Selected training dataset:
-
-```text
-Log/mamba_pose_pseudo_label_dataset_T10_selected.npz
-```
-
-Current selected pseudo-label source:
-
-- derived from `Log/mamba_pose_pseudo_label_dataset_T10_smooth_0p5s.npz`
-- `smooth_window_sec = 0.5`
-- selected because label amplitude is more conservative and kept ratio is high
-
-Current output files:
-
-```text
-Log/models/pseudo_smooth_mamba_pose.pt
-Log/models/pseudo_smooth_mamba_pose.onnx
-Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
-Log/models/pseudo_smooth_mamba_pose_train_log.csv
-Log/models/pseudo_smooth_mamba_pose_train_report.txt
-Log/models/pseudo_smooth_mamba_pose_raw_input_onnx_report.txt
-```
-
-Current verified training result:
-
-```text
-dataset X shape = [9717, 10, 18]
-dataset y shape = [9717, 6]
-train_size = 7774
-val_size = 1943
-epochs = 50
-batch_size = 128
-best_train_loss = 0.000023
-best_val_loss = 0.000022
-final_train_loss = 0.000027
-final_val_loss = 0.000024
-pred_abs_max = 0.020122
-pred_abs_mean = 0.001943
-target_abs_max = 0.088035
-target_abs_mean = 0.003068
-error_abs_max = 0.072563
-error_abs_mean = 0.002552
-```
-
-Current verified normalized-input ONNX result:
-
-```text
-normalized_onnx_export_status = exported
-normalized_onnx_checker_status = passed
-normalized_onnxruntime_status = passed
-normalized_onnx_output_abs_max = 0.005001
-normalized_onnx_output_abs_mean = 0.001870
-normalized_onnx_input_shape = [10, 18]
-normalized_onnx_output_shape = [6]
-```
-
-Current verified raw-input ONNX result:
-
-```text
-raw_input_onnx_export_status = exported
-raw_input_onnx_checker_status = passed
-raw_input_onnxruntime_status = passed
-raw_input_onnx_output_abs_max = 0.005001
-raw_input_onnx_output_abs_mean = 0.001870
-raw_input_onnx_input_shape = [10, 18]
-raw_input_onnx_output_shape = [6]
-```
-
-Current raw-vs-normalized ONNX cross-check:
-
-```text
-output_diff_abs_max_between_raw_and_normalized_onnx = 0.000000
-output_diff_abs_mean_between_raw_and_normalized_onnx = 0.000000
-```
-
-Current interpretation:
-
-> The first pseudo-label baseline training / checkpoint / ONNX / raw-input ONNX loop is now verified offline. This still does not prove real dynamic pose correction ability, because the supervision target is `pseudo_smooth_reference`, not ground truth.
-
----
-
-## 10. Current Data Scale And Artifacts
-
-Current verified offline-data scale:
-
-```text
-current latest offline export state = dynamic trajectory
-interpolated CSV rows = 9786
-interpolated T=10 sequence count = 9741
-normalized sequence count = 9741
-pseudo smooth-reference dataset count = 9597
-selected 0.5s pseudo-label dataset count = 9717
-feature_dim = 18
-label_dim = 6
-```
-
-Current main offline artifacts:
-
-```text
-Log/mamba_pose_train_data_interpolated.csv
-Log/mamba_pose_sequences_T10_interpolated.npz
-Log/mamba_pose_feature_norm_T10_interpolated.npz
-Log/mamba_pose_sequences_T10_interpolated_normalized.npz
-Log/mamba_pose_static_zero_label_dataset_T10.npz
-Log/mamba_pose_pseudo_label_dataset_T10_smooth.npz
-Log/mamba_pose_pseudo_label_dataset_T10_selected.npz
-Log/models/static_zero_mamba_pose.pt
-Log/models/static_zero_mamba_pose.onnx
-Log/models/static_zero_mamba_pose_raw_input.onnx
-Log/models/pseudo_smooth_mamba_pose.pt
-Log/models/pseudo_smooth_mamba_pose.onnx
-Log/models/pseudo_smooth_mamba_pose_raw_input.onnx
-config/mamba_pose_static_zero_runtime_observe_only.yaml
-```
-
-Current interpretation:
-
-- the X-side data preparation chain is now available from CSV export to normalized sequence NPZ
-- the first baseline `y` dataset is now available as `static_zero`
-- the first dynamic pseudo correction-label dataset is now available as `pseudo_smooth_reference`
-- the selected 0.5s pseudo-label dataset is now trained into a first pseudo-label baseline model
-- the first no-op baseline model and ONNX artifact are now available
-- the runtime-ready raw-input ONNX wrapper is now available
-- the runtime path now has an observe-only switch and that observe-only validation is already passed
-- current artifacts now include a first dynamic pseudo label and first pseudo-label baseline ONNX, but it is still not ground truth
-- `gt_*` fields remain reserved and should not be treated as ready-made labels
-
----
-
-## 11. Current Bottlenecks
-
-Current bottlenecks are now on the training-target side rather than the X-side preprocessing side:
-
-- there is still no finalized real dynamic correction-label definition `y`
-- the current `static_zero` dataset and model only validate a stationary no-op baseline
-- the current `pseudo_smooth_reference` label is only a first teacher signal from a smoothed trajectory, not GT
-- the current pseudo-label model is still only pseudo-label supervised and must not be interpreted as GT-supervised dynamic correction
-- the current `static_zero` baseline still cannot be safely used for true closed-loop correction application
-- later training and deployment must keep the same normalization parameters between Python training and ONNX-side inference preprocessing
-- the next main gap is now observe-only runtime verification of the pseudo-label raw-input ONNX before any stronger deployment claim
-
----
-
-## 12. Next Offline Task
-
-Current next recommended task:
-
-> Use `Log/models/pseudo_smooth_mamba_pose_raw_input.onnx` inside FAST-LIVO2 with `apply_correction_en=false` and perform observe-only runtime validation before discussing any stronger deployment step.
-
-Recommended next steps:
-
-1. Point `mamba_pose/model_path` at `Log/models/pseudo_smooth_mamba_pose_raw_input.onnx`.
-2. Keep `mamba_pose/apply_correction_en=false` and verify `applied=false` in runtime logs.
-3. Observe `raw` / `safe` output distribution first; do not enable true state writeback yet.
-4. Keep the existing X-side pipeline unchanged:
-   CSV clean -> short-gap interpolate -> T=10 sequence build -> feature norm.
-5. Only revisit stronger label definitions or any future closed-loop discussion after the pseudo-label runtime observe-only round is stable.
-
----
-
-## 13. Key Files
-
-### Launch
-
-```text
-launch/mapping_mid360.launch.py
-launch/mapping_avia.launch.py
-```
-
-### Config
-
-```text
-config/mamba_pose_onnx_normal_test.yaml
-config/mamba_pose_onnx_safety_test.yaml
-config/mamba_pose_onnx_reject_test.yaml
-config/mamba_pose_train_export_dummy.yaml
-config/mamba_pose_static_zero_runtime_observe_only.yaml
-```
-
-### Offline Scripts
-
-```text
-scripts/analyze_mamba_pose_train_data.py
-scripts/interpolate_mamba_pose_time_gaps.py
-scripts/build_mamba_pose_sequences.py
-scripts/compute_mamba_pose_feature_norm.py
-scripts/build_mamba_pose_static_zero_label_dataset.py
-scripts/train_mamba_pose_static_zero.py
-scripts/export_static_zero_mamba_pose_raw_input_onnx.py
-scripts/build_mamba_pose_pseudo_label_dataset.py
-scripts/train_mamba_pose_pseudo_label.py
-```
-
-### Runtime Integration Files
-
-```text
-include/pose_compensator.h
-src/pose_compensator.cpp
-include/LIVMapper.h
-src/LIVMapper.cpp
-CMakeLists.txt
-```
-
-### Documents
-
-```text
-AGENTS.md
-mamba_pose_project_context.md
-Supplementary/mamba_pose_debug_checklist.md
-Supplementary/mamba_pose_onnx_quickstart.md
-Supplementary/mamba_pose_safety_test.md
-```
-
----
-
-## 14. Common Commands
-
-### Build
-
-```bash
-cd /home/liu/fast_livo2
-source /opt/ros/humble/setup.bash
-
-colcon build --symlink-install --packages-select fast_livo \
-  --cmake-args \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DENABLE_ONNXRUNTIME=ON \
-  -DONNXRUNTIME_ROOT=/opt/onnxruntime
-
-source /home/liu/fast_livo2/install/setup.bash
-```
-
-### Check ONNX Runtime CMake State
-
-```bash
-grep -i "ONNX\\|ONNXRUNTIME" /home/liu/fast_livo2/build/fast_livo/CMakeCache.txt
-```
-
-### Check Runtime Link
-
-```bash
-ldd /home/liu/fast_livo2/install/fast_livo/lib/fast_livo/fastlivo_mapping | grep onnx
-```
-
-### Run MID360 Normal Test
-
-```bash
-cd /home/liu/fast_livo2
-source /opt/ros/humble/setup.bash
-source /home/liu/fast_livo2/install/setup.bash
-export LD_LIBRARY_PATH=/opt/onnxruntime/lib:$LD_LIBRARY_PATH
-
-ros2 launch fast_livo mapping_mid360.launch.py \
-  mamba_pose_params_file:=/home/liu/fast_livo2/src/FAST-LIVO2/config/mamba_pose_onnx_normal_test.yaml \
-  play_bag:=true \
-  bag_path:=/home/liu/rosbags/mid360_fastlivo_mamba_20260519_211645 \
-  bag_loop:=false \
-  bag_clock:=true
-```
-
-### Export Formal Training Data
-
-```bash
-cd /home/liu/fast_livo2
-source /opt/ros/humble/setup.bash
-source /home/liu/fast_livo2/install/setup.bash
-
-ros2 launch fast_livo mapping_mid360.launch.py \
-  mamba_pose_params_file:=/home/liu/fast_livo2/src/FAST-LIVO2/config/mamba_pose_train_export_dummy.yaml
-```
-
-### Analyze And Clean CSV
-
-```bash
-python3 scripts/analyze_mamba_pose_train_data.py --save-clean
-```
-
-### Interpolate Short Gaps
-
-```bash
-python3 scripts/interpolate_mamba_pose_time_gaps.py
-```
-
-### Build T=10 Sequences From Interpolated CSV
-
-```bash
-python3 scripts/build_mamba_pose_sequences.py \
-  --input Log/mamba_pose_train_data_interpolated.csv \
-  --output Log/mamba_pose_sequences_T10_interpolated.npz \
-  --report Log/mamba_pose_sequences_T10_interpolated_report.txt
-```
-
-### Compute Feature Normalization
-
-```bash
-python3 scripts/compute_mamba_pose_feature_norm.py
-```
-
-### Compute Feature Normalization And Save Normalized Sequence NPZ
-
-```bash
-python3 scripts/compute_mamba_pose_feature_norm.py --save-normalized
-```
-
-### Build Static Zero-Label Dataset
-
-```bash
-python3 scripts/build_mamba_pose_static_zero_label_dataset.py
-```
-
-### Train Static Zero No-Op Baseline And Export ONNX
-
-```bash
-python3 scripts/train_mamba_pose_static_zero.py
-```
-
-### Export Runtime-Ready Raw-Input ONNX
-
-```bash
-python3 scripts/export_static_zero_mamba_pose_raw_input_onnx.py
-```
-
-### Build Dynamic Pseudo Label Dataset
-
-```bash
-python3 scripts/build_mamba_pose_pseudo_label_dataset.py
-```
-
-### Train Pseudo-Label Baseline And Export ONNX
-
-```bash
-python3 scripts/train_mamba_pose_pseudo_label.py
-```
-
-### Run Runtime Observe-Only Verification
-
-```bash
-cd /home/liu/fast_livo2
-source /opt/ros/humble/setup.bash
-source /home/liu/fast_livo2/install/setup.bash
-export LD_LIBRARY_PATH=/opt/onnxruntime/lib:$LD_LIBRARY_PATH
-
-ros2 launch fast_livo mapping_mid360.launch.py \
-  mamba_pose_params_file:=/home/liu/fast_livo2/src/FAST-LIVO2/config/mamba_pose_static_zero_runtime_observe_only.yaml \
-  play_bag:=true \
-  bag_path:=/home/liu/rosbags/mid360_fastlivo_mamba_20260519_211645 \
-  bag_loop:=false \
-  bag_clock:=true
-```
-
----
-
-## 15. Do Not Modify
-
-Do not modify unless explicitly requested:
-
-```text
-src/voxel_map.cpp
-include/voxel_map.h
-src/vio.cpp
-include/vio.h
-```
-
-Also avoid modifying unless the task truly requires it:
-
-```text
-src/pose_compensator.cpp
-include/pose_compensator.h
-src/LIVMapper.cpp
-include/LIVMapper.h
-CMakeLists.txt
-launch/mapping_avia.launch.py
-```
-
-Do not:
-
-- redesign the project scope
-- expand to innovation points 2 or 3
-- refactor the ONNX backend
-- change the safety layer logic
-- change the PoseCompensator inference logic
-- modify the FAST-LIVO2 C++ main flow for the current offline-data tasks
-
----
-
-## 16. Recommended First Read For A New Codex Window
-
-When a new Codex window starts in this repository, it should read these files first:
-
-1. `AGENTS.md`
-2. `mamba_pose_project_context.md`
-3. `Supplementary/mamba_pose_debug_checklist.md`
-4. `Supplementary/mamba_pose_onnx_quickstart.md`
-5. `Supplementary/mamba_pose_safety_test.md`
-
-After that, if the task is about offline data preparation, check:
-
-```text
-scripts/analyze_mamba_pose_train_data.py
-scripts/interpolate_mamba_pose_time_gaps.py
-scripts/build_mamba_pose_sequences.py
-scripts/compute_mamba_pose_feature_norm.py
-scripts/build_mamba_pose_static_zero_label_dataset.py
-scripts/train_mamba_pose_static_zero.py
-scripts/export_static_zero_mamba_pose_raw_input_onnx.py
-config/mamba_pose_train_export_dummy.yaml
+launch/mapping_m3dgr_lio.launch.py
+config/m3dgr_dataset_manifest.yaml
+config/m3dgr_mid360_lio.yaml
+config/mamba_pose_m3dgr_train_export_dummy.yaml
+scripts/prepare_m3dgr_bag.py
+scripts/align_m3dgr_mocap_gt.py
+scripts/build_m3dgr_mocap_dataset.py
+tests/test_m3dgr_pipeline.py
 ```
