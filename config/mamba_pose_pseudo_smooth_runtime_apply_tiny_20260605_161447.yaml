@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    "mamba_pose/enabled": true
+    "mamba_pose/backend_type": "onnx"
+    "mamba_pose/model_path": "/home/liu/fast_livo2/src/FAST-LIVO2/Log/runs/mid360_fastlivo_mamba_20260605_161447/models/pseudo_smooth_mamba_pose_raw_input.onnx"
+    "mamba_pose/onnx_input_name": "input"
+    "mamba_pose/onnx_output_name": "output"
+    "mamba_pose/use_cpu_inference": true
+    "mamba_pose/history_len": 10
+    "mamba_pose/min_ready_frames": 10
+    "mamba_pose/debug_log_en": true
+    "mamba_pose/apply_correction_en": true
+
+    "mamba_pose/max_rotation_correction_rad": 0.005
+    "mamba_pose/max_translation_correction_m": 0.01
+    "mamba_pose/reject_non_finite_output": true
+    "mamba_pose/reject_oversized_output": true
+
+    "mamba_pose/export_train_data_en": false
+    "mamba_pose/export_train_data_path": "/home/liu/fast_livo2/src/FAST-LIVO2/Log/runs/mid360_fastlivo_mamba_20260605_161447/mamba_pose_train_data.csv"
