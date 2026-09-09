@@ -60,7 +60,8 @@ void loadVoxelConfig(rclcpp::Node::SharedPtr &node, VoxelMapConfig &voxel_config
   // Declaration of parameter of type std::vector<int> won't build, https://github.com/ros2/rclcpp/issues/1585  
   try_declare.template operator()<vector<int64_t>>("lio.layer_init_num", std::vector<int64_t>{5,5,5,5,5}); 
   try_declare.template operator()<int>("lio.max_points_num", 50);
-  try_declare.template operator()<int>("lio.min_iterations", 5);
+  try_declare.template operator()<int>("lio.max_iterations", 5);
+  try_declare.template operator()<double>("diagnostics.rotation_scale_m", 1.0);
   try_declare.template operator()<bool>("local_map.map_sliding_en", false);
   try_declare.template operator()<int>("local_map.half_map_size", 100);
   try_declare.template operator()<double>("local_map.sliding_thresh", 8.0);
@@ -75,7 +76,8 @@ void loadVoxelConfig(rclcpp::Node::SharedPtr &node, VoxelMapConfig &voxel_config
   node->get_parameter("lio.dept_err", voxel_config.dept_err_);
   node->get_parameter("lio.layer_init_num", voxel_config.layer_init_num_);
   node->get_parameter("lio.max_points_num", voxel_config.max_points_num_);
-  node->get_parameter("lio.min_iterations", voxel_config.max_iterations_);
+  node->get_parameter("lio.max_iterations", voxel_config.max_iterations_);
+  node->get_parameter("diagnostics.rotation_scale_m", voxel_config.diagnostics_rotation_scale_m);
   node->get_parameter("local_map.map_sliding_en", voxel_config.map_sliding_en);
   node->get_parameter("local_map.half_map_size", voxel_config.half_map_size);
   node->get_parameter("local_map.sliding_thresh", voxel_config.sliding_thresh);
@@ -366,6 +368,11 @@ VoxelOctoTree *VoxelOctoTree::Insert(const pointWithVar &pv)
 
 void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
 {
+  const double estimation_start = omp_get_wtime();
+  last_diagnostics_ = LioDiagnostics{};
+  last_diagnostics_.raw_feature_count = static_cast<int>(feats_undistort_->size());
+  last_diagnostics_.downsampled_feature_count = feats_down_size_;
+  last_diagnostics_.prior_covariance_diagonal = state_.cov.diagonal();
   cross_mat_list_.clear();
   cross_mat_list_.reserve(feats_down_size_);
   body_cov_list_.clear();
@@ -397,7 +404,8 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
   H_T_H.setZero();
   I_STATE.setIdentity();
 
-  bool flg_EKF_inited, flg_EKF_converged, EKF_stop_flg = 0;
+  bool flg_EKF_converged = false;
+  bool EKF_stop_flg = false;
   for (int iterCount = 0; iterCount < config_setting_.max_iterations_; iterCount++)
   {
     double total_residual = 0.0;
@@ -430,6 +438,17 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
       total_residual += fabs(ptpl_list_[i].dis_to_plane_);
     }
     effct_feat_num_ = ptpl_list_.size();
+    last_diagnostics_.iteration_count = iterCount + 1;
+    last_diagnostics_.effective_feature_count = effct_feat_num_;
+    if (effct_feat_num_ == 0)
+    {
+      RCLCPP_WARN(rclcpp::get_logger("fast_livo.voxel_map"),
+                  "No valid point-to-plane correspondences; keeping the propagated prior.");
+      state_ = state_propagat;
+      last_diagnostics_.posterior_covariance_diagonal = state_.cov.diagonal();
+      last_diagnostics_.estimation_time_ms = (omp_get_wtime() - estimation_start) * 1000.0;
+      return;
+    }
     cout << "[ LIO ] Raw feature num: " << feats_undistort_->size() << ", downsampled feature num:" << feats_down_size_ 
          << " effective feature num: " << effct_feat_num_ << " average residual: " << total_residual / effct_feat_num_ << endl;
 
@@ -493,6 +512,19 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     auto &&HTz = Hsub_T_R_inv * meas_vec;
     // fout_dbg<<"HTz: "<<HTz<<endl;
     H_T_H.block<6, 6>(0, 0) = Hsub_T_R_inv * Hsub;
+    Eigen::Matrix<double, 6, 6> scale_inverse = Eigen::Matrix<double, 6, 6>::Identity();
+    const double rotation_scale_m = std::max(config_setting_.diagnostics_rotation_scale_m, 1.0e-9);
+    scale_inverse.block<3, 3>(0, 0) /= rotation_scale_m;
+    const Eigen::Matrix<double, 6, 6> scaled_information =
+        scale_inverse.transpose() * H_T_H.block<6, 6>(0, 0) * scale_inverse;
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eigensolver(scaled_information);
+    if (eigensolver.info() == Eigen::Success)
+    {
+      last_diagnostics_.scaled_information_eigenvalues = eigensolver.eigenvalues();
+      last_diagnostics_.scaled_information_eigenvectors = eigensolver.eigenvectors();
+      const double smallest = std::max(eigensolver.eigenvalues()(0), 1.0e-12);
+      last_diagnostics_.scaled_information_condition = eigensolver.eigenvalues()(5) / smallest;
+    }
     // EigenSolver<Matrix<double, 6, 6>> es(H_T_H.block<6,6>(0,0));
     MD(DIM_STATE, DIM_STATE) &&K_1 = (H_T_H.block<DIM_STATE, DIM_STATE>(0, 0) + state_.cov.block<DIM_STATE, DIM_STATE>(0, 0).inverse()).inverse();
     G.block<DIM_STATE, 6>(0, 0) = K_1.block<DIM_STATE, 6>(0, 0) * H_T_H.block<6, 6>(0, 0);
@@ -501,9 +533,11 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     solution = K_1.block<DIM_STATE, 6>(0, 0) * HTz + vec.block<DIM_STATE, 1>(0, 0) - G.block<DIM_STATE, 6>(0, 0) * vec.block<6, 1>(0, 0);
     int minRow, minCol;
     state_ += solution;
+    last_diagnostics_.state_increment = solution.block<6, 1>(0, 0);
     auto rot_add = solution.block<3, 1>(0, 0);
     auto t_add = solution.block<3, 1>(3, 0);
     if ((rot_add.norm() * 57.3 < 0.01) && (t_add.norm() * 100 < 0.015)) { flg_EKF_converged = true; }
+    last_diagnostics_.converged = flg_EKF_converged;
     V3D euler_cur = state_.rot_end.eulerAngles(2, 1, 0);
 
     /*** Rematch Judgement ***/
@@ -527,6 +561,33 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     }
     if (EKF_stop_flg) break;
   }
+
+  std::vector<double> absolute_residuals;
+  absolute_residuals.reserve(ptpl_list_.size());
+  double squared_residual_sum = 0.0;
+  for (const auto &point_to_plane : ptpl_list_)
+  {
+    const double residual = static_cast<double>(point_to_plane.dis_to_plane_);
+    absolute_residuals.push_back(std::abs(residual));
+    squared_residual_sum += residual * residual;
+  }
+  if (!absolute_residuals.empty())
+  {
+    std::sort(absolute_residuals.begin(), absolute_residuals.end());
+    const auto percentile = [&absolute_residuals](double q) {
+      const std::size_t index = static_cast<std::size_t>(q * static_cast<double>(absolute_residuals.size() - 1));
+      return absolute_residuals[index];
+    };
+    last_diagnostics_.residual_mean_abs =
+        std::accumulate(absolute_residuals.begin(), absolute_residuals.end(), 0.0) / absolute_residuals.size();
+    last_diagnostics_.residual_rms = std::sqrt(squared_residual_sum / absolute_residuals.size());
+    last_diagnostics_.residual_median_abs = percentile(0.50);
+    last_diagnostics_.residual_p90_abs = percentile(0.90);
+    last_diagnostics_.residual_p99_abs = percentile(0.99);
+    last_diagnostics_.valid = true;
+  }
+  last_diagnostics_.posterior_covariance_diagonal = state_.cov.diagonal();
+  last_diagnostics_.estimation_time_ms = (omp_get_wtime() - estimation_start) * 1000.0;
 
   // double t2 = omp_get_wtime();
   // scan_count++;

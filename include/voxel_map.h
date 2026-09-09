@@ -49,7 +49,30 @@ typedef struct VoxelMapConfig
   double sliding_thresh;
   bool map_sliding_en;
   int half_map_size;
+  double diagnostics_rotation_scale_m;
 } VoxelMapConfig;
+
+struct LioDiagnostics
+{
+  bool valid = false;
+  bool converged = false;
+  int iteration_count = 0;
+  int raw_feature_count = 0;
+  int downsampled_feature_count = 0;
+  int effective_feature_count = 0;
+  double residual_mean_abs = 0.0;
+  double residual_rms = 0.0;
+  double residual_median_abs = 0.0;
+  double residual_p90_abs = 0.0;
+  double residual_p99_abs = 0.0;
+  double scaled_information_condition = std::numeric_limits<double>::infinity();
+  double estimation_time_ms = 0.0;
+  Eigen::Matrix<double, 6, 1> state_increment = Eigen::Matrix<double, 6, 1>::Zero();
+  Eigen::Matrix<double, 6, 1> scaled_information_eigenvalues = Eigen::Matrix<double, 6, 1>::Zero();
+  Eigen::Matrix<double, 6, 6> scaled_information_eigenvectors = Eigen::Matrix<double, 6, 6>::Identity();
+  Eigen::Matrix<double, DIM_STATE, 1> prior_covariance_diagonal = Eigen::Matrix<double, DIM_STATE, 1>::Zero();
+  Eigen::Matrix<double, DIM_STATE, 1> posterior_covariance_diagonal = Eigen::Matrix<double, DIM_STATE, 1>::Zero();
+};
 
 typedef struct PointToPlane
 {
@@ -207,6 +230,7 @@ public:
   V3D position_last_;
 
   V3D last_slide_position = {0,0,0};
+  LioDiagnostics last_diagnostics_;
 
   geometry_msgs::msg::Quaternion geoQuat_;
 

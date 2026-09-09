@@ -96,6 +96,25 @@ void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::SharedPtr
   pl_full.clear();
   double t1 = omp_get_wtime();
   int plsize = msg->point_num;
+  last_livox_timing = LivoxTimingDiagnostics{};
+  last_livox_timing.input_points = std::min<std::size_t>(plsize, msg->points.size());
+  if (last_livox_timing.input_points > 0)
+  {
+    double previous_ms = msg->points[0].offset_time / 1.0e6;
+    last_livox_timing.raw_min_offset_ms = previous_ms;
+    last_livox_timing.raw_max_offset_ms = previous_ms;
+    for (std::size_t i = 1; i < last_livox_timing.input_points; ++i)
+    {
+      const double current_ms = msg->points[i].offset_time / 1.0e6;
+      if (current_ms < previous_ms) ++last_livox_timing.raw_time_inversions;
+      last_livox_timing.max_adjacent_gap_ms =
+          std::max(last_livox_timing.max_adjacent_gap_ms, std::abs(current_ms - previous_ms));
+      last_livox_timing.raw_min_offset_ms = std::min(last_livox_timing.raw_min_offset_ms, current_ms);
+      last_livox_timing.raw_max_offset_ms = std::max(last_livox_timing.raw_max_offset_ms, current_ms);
+      previous_ms = current_ms;
+    }
+    last_livox_timing.raw_last_offset_ms = msg->points[last_livox_timing.input_points - 1].offset_time / 1.0e6;
+  }
   printf("[ Preprocess ] Input point number: %d \n", plsize);
   // printf("point_filter_num: %d\n", point_filter_num);
 
@@ -174,14 +193,26 @@ void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::SharedPtr
         pl_full[i].intensity = msg->points[i].reflectivity;
         pl_full[i].curvature = msg->points[i].offset_time / float(1000000); // use curvature as time of each laser points
 
-        if (i == 0)
-          pl_full[i].curvature = fabs(pl_full[i].curvature) < 1.0 ? pl_full[i].curvature : 0.0;
-        else
+        if (!preserve_raw_livox_time && i == 0)
         {
-          // if(fabs(pl_full[i].curvature - pl_full[i - 1].curvature) > 1.0) ROS_ERROR("time jump: %f", fabs(pl_full[i].curvature - pl_full[i - 1].curvature));
-          pl_full[i].curvature = fabs(pl_full[i].curvature - pl_full[i - 1].curvature) < 1.0
-                                     ? pl_full[i].curvature
-                                     : pl_full[i - 1].curvature + 0.004166667f; // float(100/24000)
+          const double original = pl_full[i].curvature;
+          pl_full[i].curvature = fabs(original) < 1.0 ? original : 0.0;
+          if (pl_full[i].curvature != original)
+          {
+            ++last_livox_timing.legacy_adjusted_points;
+            last_livox_timing.max_legacy_adjustment_ms = fabs(pl_full[i].curvature - original);
+          }
+        }
+        else if (!preserve_raw_livox_time)
+        {
+          const double original = pl_full[i].curvature;
+          if (fabs(original - pl_full[i - 1].curvature) >= 1.0)
+          {
+            pl_full[i].curvature = pl_full[i - 1].curvature + 0.004166667f; // legacy 100/24000 assumption
+            ++last_livox_timing.legacy_adjusted_points;
+            last_livox_timing.max_legacy_adjustment_ms =
+                std::max(last_livox_timing.max_legacy_adjustment_ms, fabs(pl_full[i].curvature - original));
+          }
         }
 
         if (valid_num % point_filter_num == 0)
@@ -196,6 +227,13 @@ void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::SharedPtr
       }
     }
   }
+  if (sort_livox_by_time)
+  {
+    std::stable_sort(pl_surf.points.begin(), pl_surf.points.end(),
+                     [](const PointType &a, const PointType &b) { return a.curvature < b.curvature; });
+    last_livox_timing.sorted_by_time = true;
+  }
+  last_livox_timing.output_points = pl_surf.size();
   printf("[ Preprocess ] Output point number: %zu \n", pl_surf.points.size());
 }
 

@@ -43,6 +43,8 @@ public:
   void handleLIO();
   void savePCD();
   void processImu();
+  void writeLioDiagnostics(const StatesGroup &prior_state, std::size_t map_voxels_before,
+                           std::size_t map_voxels_after, double map_update_time_ms);
   
   bool sync_packages(LidarMeasureGroup &meas);
   void prop_imu_once(StatesGroup &imu_prop_state, const double dt, V3D acc_avr, V3D angvel_avr);
@@ -110,6 +112,9 @@ public:
 
   bool lidar_pushed = false, imu_en, gravity_est_en, flg_reset = false, ba_bg_est_en = true;
   bool dense_map_en = false;
+  bool diagnostics_enabled = false;
+  std::string diagnostics_output_path;
+  std::string diagnostics_sequence_id;
   int img_en = 1, imu_int_frame = 3;
   bool normal_en = true;
   bool exposure_estimate_en = false;
@@ -144,7 +149,7 @@ public:
   PointCloudXYZRGB::Ptr pcl_wait_save;
   PointCloudXYZI::Ptr pcl_wait_save_intensity;
 
-  ofstream fout_pre, fout_out, fout_pcd_pos, fout_points;
+  ofstream fout_pre, fout_out, fout_pcd_pos, fout_points, fout_lio_diagnostics;
 
   pcl::VoxelGrid<PointType> downSizeFilterSurf;
 

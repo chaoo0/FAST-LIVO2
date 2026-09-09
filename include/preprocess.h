@@ -14,6 +14,8 @@ which is included as part of this source code package.
 #define PREPROCESS_H_
 
 #include "common_lib.h"
+#include <algorithm>
+#include <limits>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
@@ -130,6 +132,20 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(Pandar128_ros::Point,
                                   (float, x, x)(float, y, y)(float, z, z)(float, timestamp, timestamp))
 /*****************/
 
+struct LivoxTimingDiagnostics
+{
+  std::size_t input_points = 0;
+  std::size_t output_points = 0;
+  std::size_t raw_time_inversions = 0;
+  std::size_t legacy_adjusted_points = 0;
+  double raw_min_offset_ms = 0.0;
+  double raw_max_offset_ms = 0.0;
+  double raw_last_offset_ms = 0.0;
+  double max_adjacent_gap_ms = 0.0;
+  double max_legacy_adjustment_ms = 0.0;
+  bool sorted_by_time = false;
+};
+
 class Preprocess
 {
 public:
@@ -150,6 +166,9 @@ public:
   
   double blind, blind_sqr;
   bool feature_enabled, given_offset_time;
+  bool preserve_raw_livox_time = true;
+  bool sort_livox_by_time = true;
+  LivoxTimingDiagnostics last_livox_timing;
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> pub_full;
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> pub_surf;
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> pub_corn;

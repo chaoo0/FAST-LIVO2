@@ -12,8 +12,28 @@ which is included as part of this source code package.
 
 #include "LIVMapper.h"
 #include <vikit/camera_loader.h>
+#include <algorithm>
+#include <cmath>
+#include <numeric>
 
 using namespace Sophus;
+
+namespace
+{
+double maxPointOffsetMs(const PointCloudXYZI::Ptr &cloud)
+{
+  if (!cloud || cloud->empty()) return 0.0;
+  return std::max_element(cloud->points.begin(), cloud->points.end(),
+                          [](const PointType &a, const PointType &b) { return a.curvature < b.curvature; })
+      ->curvature;
+}
+
+template <typename Derived>
+void appendCsvVector(std::ostream &stream, const Eigen::MatrixBase<Derived> &value)
+{
+  for (Eigen::Index i = 0; i < value.size(); ++i) stream << ',' << value(i);
+}
+} // namespace
 LIVMapper::LIVMapper(rclcpp::Node::SharedPtr &node, std::string node_name, const rclcpp::NodeOptions & options)
     : node(std::make_shared<rclcpp::Node>(node_name, options)),
       extT(0, 0, 0),
@@ -107,6 +127,12 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   try_declare.template operator()<int>("preprocess.point_filter_num", 3);
   try_declare.template operator()<int>("preprocess.scan_rate", 10);
   try_declare.template operator()<bool>("preprocess.feature_extract_enabled", false);
+  try_declare.template operator()<bool>("preprocess.preserve_raw_livox_time", true);
+  try_declare.template operator()<bool>("preprocess.sort_livox_by_time", true);
+
+  try_declare.template operator()<bool>("diagnostics.enabled", false);
+  try_declare.template operator()<std::string>("diagnostics.output_path", "");
+  try_declare.template operator()<std::string>("diagnostics.sequence_id", "");
 
   try_declare.template operator()<int>("pcd_save.interval", -1);
   try_declare.template operator()<bool>("pcd_save.pcd_save_en", false);
@@ -165,6 +191,12 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("preprocess.scan_rate", p_pre->SCAN_RATE);
   this->node->get_parameter("preprocess.point_filter_num", p_pre->point_filter_num);
   this->node->get_parameter("preprocess.feature_extract_enabled", p_pre->feature_enabled);
+  this->node->get_parameter("preprocess.preserve_raw_livox_time", p_pre->preserve_raw_livox_time);
+  this->node->get_parameter("preprocess.sort_livox_by_time", p_pre->sort_livox_by_time);
+
+  this->node->get_parameter("diagnostics.enabled", diagnostics_enabled);
+  this->node->get_parameter("diagnostics.output_path", diagnostics_output_path);
+  this->node->get_parameter("diagnostics.sequence_id", diagnostics_sequence_id);
 
   this->node->get_parameter("pcd_save.interval", pcd_save_interval);
   this->node->get_parameter("pcd_save.pcd_save_en", pcd_save_en);
@@ -261,6 +293,30 @@ void LIVMapper::initializeFiles()
   if(pcd_save_interval > 0) fout_pcd_pos.open(std::string(ROOT_DIR) + "Log/PCD/scans_pos.json", std::ios::out);
   fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"), std::ios::out);
   fout_out.open(DEBUG_FILE_DIR("mat_out.txt"), std::ios::out);
+  if (diagnostics_enabled)
+  {
+    if (diagnostics_output_path.empty())
+      throw std::runtime_error("diagnostics.enabled requires diagnostics.output_path");
+    fout_lio_diagnostics.open(diagnostics_output_path, std::ios::out);
+    if (!fout_lio_diagnostics.is_open())
+      throw std::runtime_error("Unable to open LIO diagnostics output: " + diagnostics_output_path);
+    fout_lio_diagnostics << "schema_version,sequence_id,measurement_time,valid,converged,iterations,raw_points,downsampled_points,effective_points"
+                         << ",residual_mean_abs,residual_rms,residual_median_abs,residual_p90_abs,residual_p99_abs,information_condition"
+                         << ",estimation_time_ms,map_update_time_ms,map_voxels_before,map_voxels_after"
+                         << ",prior_qx,prior_qy,prior_qz,prior_qw,prior_px,prior_py,prior_pz"
+                         << ",posterior_qx,posterior_qy,posterior_qz,posterior_qw,posterior_px,posterior_py,posterior_pz"
+                         << ",imu_count,imu_dt_mean,imu_dt_max,imu_nonmonotonic,gyro_mean_x,gyro_mean_y,gyro_mean_z,gyro_norm_std"
+                         << ",accel_mean_x,accel_mean_y,accel_mean_z,accel_norm_std"
+                         << ",livox_input_points,livox_output_points,livox_time_inversions,livox_legacy_adjusted"
+                         << ",livox_min_offset_ms,livox_max_offset_ms,livox_last_offset_ms,livox_max_adjacent_gap_ms,livox_max_adjustment_ms,livox_sorted";
+    for (int i = 0; i < 6; ++i) fout_lio_diagnostics << ",state_increment_" << i;
+    for (int i = 0; i < 6; ++i) fout_lio_diagnostics << ",information_eigenvalue_" << i;
+    for (int col = 0; col < 6; ++col)
+      for (int row = 0; row < 6; ++row) fout_lio_diagnostics << ",information_eigenvector_" << row << '_' << col;
+    for (int i = 0; i < DIM_STATE; ++i) fout_lio_diagnostics << ",prior_covariance_" << i;
+    for (int i = 0; i < DIM_STATE; ++i) fout_lio_diagnostics << ",posterior_covariance_" << i;
+    fout_lio_diagnostics << '\n';
+  }
 }
 
 void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node, image_transport::ImageTransport &it_)
@@ -444,6 +500,7 @@ void LIVMapper::handleLIO()
 
   double t1 = omp_get_wtime();
 
+  const StatesGroup prior_state = state_propagat;
   voxelmap_manager->StateEstimation(state_propagat);
   _state = voxelmap_manager->state_;
   _pv_list = voxelmap_manager->pv_list_;
@@ -498,7 +555,12 @@ void LIVMapper::handleLIO()
           (-point_crossmat) * _state.cov.block<3, 3>(0, 0) * (-point_crossmat).transpose() + _state.cov.block<3, 3>(3, 3);
     voxelmap_manager->pv_list_[i].var = var;
   }
+  const std::size_t map_voxels_before = voxel_map.size();
+  const double map_update_start = omp_get_wtime();
   voxelmap_manager->UpdateVoxelMap(voxelmap_manager->pv_list_);
+  const double map_update_time_ms = (omp_get_wtime() - map_update_start) * 1000.0;
+  const std::size_t map_voxels_after = voxel_map.size();
+  writeLioDiagnostics(prior_state, map_voxels_before, map_voxels_after, map_update_time_ms);
   std::cout << "[ LIO ] Update Voxel Map" << std::endl;
   _pv_list = voxelmap_manager->pv_list_;
   
@@ -775,6 +837,8 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstShare
   {
     RCLCPP_ERROR(this->node->get_logger(),"lidar loop back, clear buffer");
     lid_raw_data_buffer.clear();
+    lid_header_time_buffer.clear();
+    lidar_pushed = false;
   }
   // ROS_INFO("get point cloud at time: %.6f", stamp2Sec(msg->header.stamp));
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
@@ -811,6 +875,8 @@ void LIVMapper::livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::ConstShar
   {
     RCLCPP_ERROR(this->node->get_logger(), "lidar loop back, clear buffer");
     lid_raw_data_buffer.clear();
+    lid_header_time_buffer.clear();
+    lidar_pushed = false;
   }
   RCLCPP_INFO(this->node->get_logger(), "get point cloud at time: %.6f", stamp2Sec(msg->header.stamp));
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
@@ -963,7 +1029,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       if (meas.lidar->points.size() <= 1) return false;
 
       meas.lidar_frame_beg_time = lid_header_time_buffer.front();                                                // generate lidar_frame_beg_time
-      meas.lidar_frame_end_time = meas.lidar_frame_beg_time + meas.lidar->points.back().curvature / double(1000); // calc lidar scan end time
+      meas.lidar_frame_end_time = meas.lidar_frame_beg_time + maxPointOffsetMs(meas.lidar) / double(1000); // calc lidar scan end time
       meas.pcl_proc_cur = meas.lidar;
       lidar_pushed = true;                                                                                       // flag
     }
@@ -1023,7 +1089,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       // printf("[ Data Cut ] last_lio_update_time: %lf \n",
       // meas.last_lio_update_time);
 
-      double lid_newest_time = lid_header_time_buffer.back() + lid_raw_data_buffer.back()->points.back().curvature / double(1000);
+      double lid_newest_time = lid_header_time_buffer.back() + maxPointOffsetMs(lid_raw_data_buffer.back()) / double(1000);
       double imu_newest_time = stamp2Sec(imu_buffer.back()->header.stamp);
 
       if (img_capture_time < meas.last_lio_update_time + 0.00001)
@@ -1156,7 +1222,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       if (lid_raw_data_buffer.empty())  return false;
       meas.lidar = lid_raw_data_buffer.front(); // push the first lidar topic
       meas.lidar_frame_beg_time = lid_header_time_buffer.front(); // generate lidar_beg_time
-      meas.lidar_frame_end_time  = meas.lidar_frame_beg_time + meas.lidar->points.back().curvature / double(1000); // calc lidar scan end time
+      meas.lidar_frame_end_time  = meas.lidar_frame_beg_time + maxPointOffsetMs(meas.lidar) / double(1000); // calc lidar scan end time
       lidar_pushed = true;             
     }
     struct MeasureGroup m; // standard method to keep imu message.
@@ -1253,7 +1319,7 @@ void LIVMapper::publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::Po
   { 
     pcl::toROSMsg(*pcl_w_wait_pub, laserCloudmsg); 
   }
-  laserCloudmsg.header.stamp = this->node->get_clock()->now(); //.fromSec(last_timestamp_lidar);
+  laserCloudmsg.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
   laserCloudmsg.header.frame_id = "camera_init";
   pubLaserCloudFullRes->publish(laserCloudmsg);
 
@@ -1333,7 +1399,7 @@ void LIVMapper::publish_effect_world(const rclcpp::Publisher<sensor_msgs::msg::P
   }
   sensor_msgs::msg::PointCloud2 laserCloudFullRes3;
   pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
-  laserCloudFullRes3.header.stamp = this->node->get_clock()->now();
+  laserCloudFullRes3.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
   laserCloudFullRes3.header.frame_id = "camera_init";
   pubLaserCloudEffect->publish(laserCloudFullRes3);
 }
@@ -1353,7 +1419,7 @@ void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry
 {
   odomAftMapped.header.frame_id = "camera_init";
   odomAftMapped.child_frame_id = "aft_mapped";
-  odomAftMapped.header.stamp = this->node->get_clock()->now(); //.ros::Time()fromSec(last_timestamp_lidar);
+  odomAftMapped.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
   set_posestamp(odomAftMapped.pose.pose);
 
   static std::shared_ptr<tf2_ros::TransformBroadcaster> br;
@@ -1372,7 +1438,7 @@ void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry
 
 void LIVMapper::publish_mavros(const rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr &mavros_pose_publisher)
 {
-  msg_body_pose.header.stamp = this->node->get_clock()->now();
+  msg_body_pose.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
   msg_body_pose.header.frame_id = "camera_init";
   set_posestamp(msg_body_pose.pose);
   mavros_pose_publisher->publish(msg_body_pose);
@@ -1381,7 +1447,7 @@ void LIVMapper::publish_mavros(const rclcpp::Publisher<geometry_msgs::msg::PoseS
 void LIVMapper::publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath)
 {
   set_posestamp(msg_body_pose.pose);
-  msg_body_pose.header.stamp = this->node->get_clock()->now();
+  msg_body_pose.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
   msg_body_pose.header.frame_id = "camera_init";
   path.poses.push_back(msg_body_pose);
   pubPath->publish(path);
