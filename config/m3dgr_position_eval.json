@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "metric_scope": "position_only",
+  "estimate_format": "TUM timestamp x y z qx qy qz qw",
+  "ground_truth_format": "TUM timestamp x y z qx qy qz qw, position fields only",
+  "quaternion_order": "qx_qy_qz_qw",
+  "estimate_pose_direction": "T_world_imu",
+  "ground_truth_duplicate_policy": "stable_sort_then_mean_position_at_equal_timestamp",
+  "ground_truth_interpolation": "linear_position_at_estimate_timestamp",
+  "max_gt_bracket_gap_s": 0.25,
+  "alignment": "rigid_SE3_on_matched_positions_fixed_scale",
+  "rpe_definition": "world_frame_position_displacement_difference",
+  "rpe_horizons_s": [1.0, 5.0, 10.0],
+  "horizon_match_tolerance_s": 0.06,
+  "rotation_metrics_enabled": false,
+  "reference_point_note": "Available outdoor GT has identity quaternions; RTK antenna to estimator IMU lever-arm compensation is not reconstructible per timestamp."
+}

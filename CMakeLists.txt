@@ -195,6 +195,14 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/audit_m3dgr_bag.py
+  scripts/evaluate_m3dgr_position.py
+  scripts/run_m3dgr_lio_baseline.sh
+  scripts/summarize_m3dgr_runs.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Export dependencies
 ament_export_dependencies(
   rclcpp

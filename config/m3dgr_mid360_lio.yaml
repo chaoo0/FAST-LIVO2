@@ -1,0 +1,93 @@
+/**:
+  ros__parameters:
+    # M3DGR ROS topics. Source: official M3DGR README and the bag metadata.
+    common:
+      lid_topic: "/livox/mid360/lidar"       # livox_ros_driver2/msg/CustomMsg
+      imu_topic: "/livox/mid360/imu"         # sensor_msgs/msg/Imu
+      img_topic: "/camera/color/image_raw"    # unused in this LIO-only stage
+      lidar_en: 1
+      img_en: 0
+      ros_driver_bug_fix: false
+
+    extrin_calib:
+      # p_imu = R_il * p_lidar + t_il. Source: M3DGR calibration.md,
+      # MID-360 -> MID-360 built-in IMU. Translation unit: metre.
+      extrinsic_T: [-0.011, -0.02329, 0.04412]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+
+      # These Lidar->camera values are unused while common.img_en=0. They are
+      # retained so the same calibrated rig definition can be audited later.
+      # p_camera = R_cl * p_lidar + t_cl; translation unit: metre.
+      Rcl: [0.0722207, -0.9973870, -0.0020542,
+            0.5210050,  0.0394820, -0.8526400,
+            0.8504930,  0.0605080,  0.5224940]
+      Pcl: [-0.0442358, -0.4117120, 0.1685680]
+
+    time_offset:
+      # The ROS2 baseline does not read imu_time_offset; zero is documented
+      # here, not relied upon as a configurable correction.
+      imu_time_offset: 0.0                     # seconds
+      img_time_offset: 0.1                     # seconds; unused in LIO
+      exposure_time_init: 0.0                  # seconds; unused in LIO
+
+    preprocess:
+      # Source: official M3DGR FAST-LIVO2 MID-360 adaptation. These are tuned
+      # estimator parameters, not manufacturer calibration constants.
+      lidar_type: 1                            # AVIA enum also handles Livox CustomMsg
+      scan_line: 4                             # MID-360 line IDs 0..3
+      blind: 0.8                               # metres
+      point_filter_num: 1
+      filter_size_surf: 0.1                    # metres
+      scan_rate: 10                            # hertz
+      feature_extract_enabled: false
+
+    imu:
+      imu_en: true
+      imu_int_frame: 30
+      # Algorithm process-noise scale used directly in Q*dt^2. Source: the
+      # official M3DGR FAST-LIVO2 adaptation; it is not the Allan noise density.
+      acc_cov: 0.5
+      gyr_cov: 0.3
+      gravity_est_en: true
+      ba_bg_est_en: true
+
+    lio:
+      # The d6e22ad ROS2 baseline accidentally reads lio.min_iterations.
+      # Setting both keys to 5 preserves the baseline default without a core fix.
+      min_iterations: 5
+      max_iterations: 5
+      dept_err: 0.02                           # metres, range uncertainty scale
+      beam_err: 0.05                           # degrees, beam angular uncertainty
+      min_eigen_value: 0.0025                  # m^2, plane-fit threshold
+      voxel_size: 0.5                          # metres
+      max_layer: 2
+      max_points_num: 50
+      layer_init_num: [5, 5, 5, 5, 5]
+
+    local_map:
+      map_sliding_en: false
+      half_map_size: 100                       # voxel indices
+      sliding_thresh: 8.0                      # metres of state-position motion
+
+    uav:
+      imu_rate_odom: false
+      gravity_align_en: false
+
+    publish:
+      dense_map_en: true
+      pub_effect_point_en: false
+      pub_plane_en: false
+      pub_scan_num: 1
+      blind_rgb_points: 0.0
+
+    evo:
+      seq_name: "M3DGR_LIO"
+      pose_output_en: true
+
+    pcd_save:
+      pcd_save_en: false
+      colmap_output_en: false
+      filter_size_pcd: 0.15                    # metres; unused while saving is off
+      interval: -1

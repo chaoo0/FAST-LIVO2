@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-10",
+  "status": "not_accepted",
+  "development_baseline": "d6e22ad4e1ee478e41050cfa83a3c35e98d00ee5",
+  "sequence": "Outdoor01",
+  "playback_rate": 1.0,
+  "input": {
+    "lidar_topic": "/livox/mid360/lidar",
+    "lidar_messages": 4116,
+    "imu_topic": "/livox/mid360/imu",
+    "imu_messages": 82312
+  },
+  "runs": [
+    {
+      "run": 1,
+      "trajectory_count": 4113,
+      "position_ate_rmse_m": 0.2742026847749988,
+      "position_rpe_rmse_m": {"1s": 0.03175035729010006, "5s": 0.07285302871558968, "10s": 0.11294783192589594},
+      "mean_frame_time_ms": 19.255830294189156,
+      "p99_frame_time_ms": 35.33876,
+      "trajectory_sha256": "255c53f037b9c242a69d9a12b4ef82f0d0fbd49a8878d9c2bd8539c1b606e421"
+    },
+    {
+      "run": 2,
+      "trajectory_count": 4113,
+      "position_ate_rmse_m": 0.2803983209449868,
+      "position_rpe_rmse_m": {"1s": 0.03228142430896248, "5s": 0.07306308235331109, "10s": 0.11364108118324405},
+      "mean_frame_time_ms": 19.33566350595672,
+      "p99_frame_time_ms": 35.61164000000001,
+      "trajectory_sha256": "bc0f5c9483a82e43fe11e39433fe973e1a887781cc7f5dd5adc1729444b5e227"
+    },
+    {
+      "run": 3,
+      "trajectory_count": 4113,
+      "position_ate_rmse_m": 0.2803983209449868,
+      "position_rpe_rmse_m": {"1s": 0.03228142430896248, "5s": 0.07306308235331109, "10s": 0.11364108118324405},
+      "mean_frame_time_ms": 19.50412083637248,
+      "p99_frame_time_ms": 37.70764,
+      "trajectory_sha256": "bc0f5c9483a82e43fe11e39433fe973e1a887781cc7f5dd5adc1729444b5e227"
+    }
+  ],
+  "repeatability": {
+    "position_ate_sample_cv": 0.01285169495224789,
+    "acceptance_threshold": 0.01,
+    "accepted": false,
+    "all_output_counts_equal": true,
+    "all_output_timestamps_equal": true
+  },
+  "evaluation": {
+    "scope": "position_only",
+    "matched_samples_per_run": 4111,
+    "full_se3_metrics_available": false
+  },
+  "gates": {
+    "build": "pass",
+    "bag_readability": "pass",
+    "configuration_provenance": "pass",
+    "lio_end_to_end": "pass",
+    "three_run_counts": "pass",
+    "numerical_repeatability": "fail",
+    "ground_truth_evaluation": "partial_position_only",
+    "no_core_algorithm_change": "pass",
+    "livo": "not_run_due_to_lio_gate"
+  }
+}
