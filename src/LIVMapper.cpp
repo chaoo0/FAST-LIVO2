@@ -14,8 +14,8 @@ which is included as part of this source code package.
 #include <vikit/camera_loader.h>
 
 using namespace Sophus;
-LIVMapper::LIVMapper(rclcpp::Node::SharedPtr &node, std::string node_name, const rclcpp::NodeOptions & options)
-    : node(std::make_shared<rclcpp::Node>(node_name, options)),
+LIVMapper::LIVMapper(const rclcpp::Node::SharedPtr &node)
+    : node(node),
       extT(0, 0, 0),
       extR(M3D::Identity())
 {
@@ -263,9 +263,8 @@ void LIVMapper::initializeFiles()
   fout_out.open(DEBUG_FILE_DIR("mat_out.txt"), std::ios::out);
 }
 
-void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node, image_transport::ImageTransport &it_)
+void LIVMapper::initializeSubscribersAndPublishers(image_transport::ImageTransport &image_transport)
 {
-  image_transport::ImageTransport it(this->node);
   if (p_pre->lidar_type == AVIA) {
     sub_pcl = this->node->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, 200000, std::bind(&LIVMapper::livox_pcl_cbk, this, std::placeholders::_1));
   } else {
@@ -287,10 +286,11 @@ void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node
   pubLaserCloudDynRmed = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/dyn_obj_removed", 100);
   pubLaserCloudDynDbg = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/dyn_obj_dbg_hist", 100);
   mavros_pose_publisher = this->node->create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/vision_pose/pose", 10);
-  pubImage = it.advertise("/rgb_img", 1);
+  pubImage = image_transport.advertise("/rgb_img", 1);
   pubImuPropOdom = this->node->create_publisher<nav_msgs::msg::Odometry>("/LIVO2/imu_propagate", 10000);
   imu_prop_timer = this->node->create_wall_timer(0.004s, std::bind(&LIVMapper::imu_prop_callback, this));
   voxelmap_manager->voxel_map_pub_= this->node->create_publisher<visualization_msgs::msg::MarkerArray>("/planes", 10000);
+  tf_broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(this->node);
 }
 
 void LIVMapper::handleFirstFrame() 
@@ -608,24 +608,36 @@ void LIVMapper::savePCD()
   }
 }
 
-void LIVMapper::run(rclcpp::Node::SharedPtr &node) 
+void LIVMapper::run()
 {
   rclcpp::Rate rate(5000);
-  while (rclcpp::ok()) 
+  const auto context = this->node->get_node_base_interface()->get_context();
+  while (rclcpp::ok(context))
   {
-    rclcpp::spin_some(this->node);
-    if (!sync_packages(LidarMeasures)) 
+    try
     {
-      rate.sleep();
-      continue;
+      rclcpp::spin_some(this->node);
+      if (!rclcpp::ok(context)) break;
+      if (!sync_packages(LidarMeasures))
+      {
+        rate.sleep();
+        continue;
+      }
+      handleFirstFrame();
+
+      processImu();
+      if (!rclcpp::ok(context)) break;
+
+      // if (!p_imu->imu_time_init) continue;
+
+      stateEstimationAndMapping();
     }
-    handleFirstFrame();
-
-    processImu();
-
-    // if (!p_imu->imu_time_init) continue;
-
-    stateEstimationAndMapping();
+    catch (const rclcpp::exceptions::RCLError &error)
+    {
+      if (rclcpp::ok(context)) throw;
+      RCLCPP_INFO(this->node->get_logger(), "ROS context stopped during processing: %s", error.what());
+      break;
+    }
   }
   savePCD();
 }
@@ -1356,8 +1368,6 @@ void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry
   odomAftMapped.header.stamp = this->node->get_clock()->now(); //.ros::Time()fromSec(last_timestamp_lidar);
   set_posestamp(odomAftMapped.pose.pose);
 
-  static std::shared_ptr<tf2_ros::TransformBroadcaster> br;
-  br = std::make_shared<tf2_ros::TransformBroadcaster>(this->node);
   tf2::Transform transform;
   tf2::Quaternion q;
   transform.setOrigin(tf2::Vector3(_state.pos_end(0), _state.pos_end(1), _state.pos_end(2)));
@@ -1366,7 +1376,7 @@ void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry
   q.setY(geoQuat.y);
   q.setZ(geoQuat.z);
   transform.setRotation(q);
-  br->sendTransform(geometry_msgs::msg::TransformStamped(createTransformStamped(transform, odomAftMapped.header.stamp, "camera_init", "aft_mapped")));
+  tf_broadcaster->sendTransform(geometry_msgs::msg::TransformStamped(createTransformStamped(transform, odomAftMapped.header.stamp, "camera_init", "aft_mapped")));
   pubOdomAftMapped->publish(odomAftMapped);
 }
 

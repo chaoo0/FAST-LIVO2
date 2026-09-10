@@ -18,9 +18,9 @@ Every item is kept separate until it has a source location, reference comparison
 |---|---|---|---|
 | A-001 | upstream build portability defect | fixed, short regression passed, full regression pending | x86 `-march=native` creates an Eigen/PCL allocator ABI mismatch |
 | A-002 | upstream arrival-order assumption exposed by ROS 2 execution | confirmed, unfixed | pre-LiDAR IMU acceptance depends on callback scheduling rather than timestamps |
-| A-003 | ROS 2 port defect | confirmed, unfixed | TF broadcaster is reconstructed on every odometry publication |
-| A-004 | ROS 2 shutdown race | confirmed, unfixed | shutdown can invalidate the ROS context between loop check, `spin_some`, and publication |
-| A-005 | ROS 2 port defect candidate | under investigation | `main.cpp` constructs an unused `ImageTransport` from a null node pointer |
+| A-003 | ROS 2 port defect | fixed, short regression passed, full regression pending | TF broadcaster was reconstructed on every odometry publication |
+| A-004 | ROS 2 shutdown race | fixed, short regression passed, full regression pending | shutdown could invalidate the ROS context between loop check, `spin_some`, and publication |
+| A-005 | ROS 2 port defect | fixed, short regression passed, full regression pending | `main.cpp` constructed an `ImageTransport` from a null node pointer |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -50,7 +50,7 @@ Remove `-march=native` from the x86 Release flags while retaining `-O3`, `-mtune
 - Low-rate M3DGR prefix, drain, SIGINT: mapping process finished cleanly instead of `-11`.
 - Full Outdoor01 three-run regression: pending.
 
-The ASan post-fix run did not reproduce A-001, but it exposed A-004 before normal destruction, so it is not counted as an independent clean-shutdown pass.
+An ordinary ASan build is not ABI-compatible with Ubuntu's prebuilt PCL for this check: Eigen deliberately changes `EIGEN_MALLOC_ALREADY_ALIGNED` from 1 to 0 when `__SANITIZE_ADDRESS__` is defined, while the distro PCL binary retains its normal 16-byte malloc contract. That instrumentation mismatch independently reproduces `handmade_aligned_free` even after removing `-march=native`, so it is not evidence that the Release fix failed. A validation-only ASan build with `EIGEN_MALLOC_ALREADY_ALIGNED=1`, matching the system PCL ABI, processed the same short M3DGR prefix and destroyed the mapper without an ASan finding. This macro is not added to the production CMake configuration.
 
 ## A-002: arrival-dependent initial IMU window
 
@@ -72,12 +72,21 @@ Both HKU ROS 1 and chaoo0 ROS 2 return immediately from the IMU callback while `
 - The ROS 2 port assigns `std::make_shared<tf2_ros::TransformBroadcaster>(node)` on every odometry publication, repeatedly creating a ROS publisher.
 - Under ASan slowdown, SIGINT arrived during a frame and the code subsequently attempted to create a publisher or wait set after the ROS context was invalid, throwing `rclcpp::exceptions::RCLError` and aborting.
 
-The fixes must move TF broadcaster construction to initialization and make the run loop stop safely if shutdown occurs between processing stages. These changes will be committed separately from A-001.
+The fix moves TF broadcaster construction to initialization and makes the run loop stop safely if shutdown occurs between processing stages. These changes are kept separate from A-001.
+
+The implementation now creates the ROS node explicitly in `main`, passes the valid node to `LIVMapper`, uses the caller's `ImageTransport`, and constructs the TF broadcaster once with the other publishers. ROS entities are declared after the node member so they are destroyed before it. The run loop checks the node context between stages and treats `RCLError` as a clean stop only when the context is already shutting down; unrelated ROS errors are rethrown.
+
+### Short regression evidence
+
+- Clean ROS 2 Humble Release build: pass.
+- Normal-rate ten-second M3DGR prefix interrupted during processing: mapper finished cleanly in Release.
+- The same processing interruption in the PCL-ABI-matched ASan build: mapper completed the in-flight frame and finished cleanly, with no ASan finding.
+- Idle PCL-ABI-matched ASan node interrupted by a single launch-forwarded SIGINT: mapper finished cleanly, with no ASan finding.
+- ASan execution was slower than the sensor stream and emitted synchronization warnings, so these runs validate memory/lifecycle behavior only; they are not runtime or estimator-accuracy evidence.
 
 ## Next audit actions
 
-1. Complete and commit A-001 as an isolated build fix.
-2. Fix A-003/A-004 and reproduce both idle and mid-frame shutdown.
-3. Define and test a timestamp-based first-IMU policy for A-002.
-4. Re-run full Outdoor01 three times before accepting any repeatability claim.
-5. Continue through IMU propagation, LiDAR update, covariance, voxel-map feedback, publication timestamps, and the visual path only after the input/lifecycle layer is stable.
+1. Commit A-003/A-004/A-005 separately from the completed A-001 build fix.
+2. Define and test a timestamp-based first-IMU policy for A-002.
+3. Re-run full Outdoor01 three times before accepting any repeatability claim.
+4. Continue through IMU propagation, LiDAR update, covariance, voxel-map feedback, publication timestamps, and the visual path only after the input/lifecycle layer is stable.

@@ -7,11 +7,11 @@ int main(int argc, char **argv)
   options.allow_undeclared_parameters(true);
   options.automatically_declare_parameters_from_overrides(true);
 
-  rclcpp::Node::SharedPtr nh;
+  auto nh = std::make_shared<rclcpp::Node>("laserMapping", options);
   image_transport::ImageTransport it_(nh);
-  LIVMapper mapper(nh, "laserMapping", options);
-  mapper.initializeSubscribersAndPublishers(nh, it_);
-  mapper.run(nh);
+  LIVMapper mapper(nh);
+  mapper.initializeSubscribersAndPublishers(it_);
+  mapper.run();
   rclcpp::shutdown();
   return 0;
 }

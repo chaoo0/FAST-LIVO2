@@ -30,12 +30,12 @@ which is included as part of this source code package.
 class LIVMapper
 {
 public:
-  LIVMapper(rclcpp::Node::SharedPtr &node, std::string node_name, const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  explicit LIVMapper(const rclcpp::Node::SharedPtr &node);
   ~LIVMapper();
-  void initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &nh, image_transport::ImageTransport &it_);
+  void initializeSubscribersAndPublishers(image_transport::ImageTransport &image_transport);
   void initializeComponents(rclcpp::Node::SharedPtr &node);
   void initializeFiles();
-  void run(rclcpp::Node::SharedPtr &node);
+  void run();
   void gravityAlignment();
   void handleFirstFrame();
   void stateEstimationAndMapping();
@@ -164,6 +164,8 @@ public:
   VoxelMapManagerPtr voxelmap_manager;
   VIOManagerPtr vio_manager;
 
+  // Declare the node before all ROS entities so it is destroyed after them.
+  rclcpp::Node::SharedPtr node;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr plane_pub;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr voxel_pub;
   std::shared_ptr<rclcpp::SubscriptionBase> sub_pcl;
@@ -182,7 +184,7 @@ public:
   image_transport::Publisher pubImage;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr mavros_pose_publisher;
   rclcpp::TimerBase::SharedPtr imu_prop_timer;
-  rclcpp::Node::SharedPtr node;
+  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 
   int frame_num = 0;
   double aver_time_consu = 0;
