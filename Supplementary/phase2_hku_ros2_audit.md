@@ -16,11 +16,11 @@ Every item is kept separate until it has a source location, reference comparison
 
 | ID | Classification | Status | Summary |
 |---|---|---|---|
-| A-001 | upstream build portability defect | fixed, short regression passed, full regression pending | x86 `-march=native` creates an Eigen/PCL allocator ABI mismatch |
-| A-002 | upstream arrival-order assumption exposed by ROS 2 execution | fixed, short regression passed, full regression pending | pre-LiDAR IMU acceptance depended on callback scheduling rather than timestamps |
-| A-003 | ROS 2 port defect | fixed, short regression passed, full regression pending | TF broadcaster was reconstructed on every odometry publication |
-| A-004 | ROS 2 shutdown race | fixed, short regression passed, full regression pending | shutdown could invalidate the ROS context between loop check, `spin_some`, and publication |
-| A-005 | ROS 2 port defect | fixed, short regression passed, full regression pending | `main.cpp` constructed an `ImageTransport` from a null node pointer |
+| A-001 | upstream build portability defect | fixed, full Outdoor01 regression passed | x86 `-march=native` creates an Eigen/PCL allocator ABI mismatch |
+| A-002 | upstream arrival-order assumption exposed by ROS 2 execution | fixed, full Outdoor01 regression passed | pre-LiDAR IMU acceptance depended on callback scheduling rather than timestamps |
+| A-003 | ROS 2 port defect | fixed, full Outdoor01 LIO regression passed | TF broadcaster was reconstructed on every odometry publication |
+| A-004 | ROS 2 shutdown race | fixed, full Outdoor01 regression passed | shutdown could invalidate the ROS context between loop check, `spin_some`, and publication |
+| A-005 | ROS 2 port defect | fixed, full Outdoor01 LIO regression passed; LIVO pending | `main.cpp` constructed an `ImageTransport` from a null node pointer |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -48,7 +48,7 @@ Remove `-march=native` from the x86 Release flags while retaining `-O3`, `-mtune
 - Clean ROS 2 Humble Release build: pass.
 - `compile_commands.json` contains no `-march=native`: pass.
 - Low-rate M3DGR prefix, drain, SIGINT: mapping process finished cleanly instead of `-11`.
-- Full Outdoor01 three-run regression: pending.
+- Full Outdoor01 three-run regression: pass; see the consolidated results below.
 
 An ordinary ASan build is not ABI-compatible with Ubuntu's prebuilt PCL for this check: Eigen deliberately changes `EIGEN_MALLOC_ALREADY_ALIGNED` from 1 to 0 when `__SANITIZE_ADDRESS__` is defined, while the distro PCL binary retains its normal 16-byte malloc contract. That instrumentation mismatch independently reproduces `handmade_aligned_free` even after removing `-march=native`, so it is not evidence that the Release fix failed. A validation-only ASan build with `EIGEN_MALLOC_ALREADY_ALIGNED=1`, matching the system PCL ABI, processed the same short M3DGR prefix and destroyed the mapper without an ASan finding. This macro is not added to the production CMake configuration.
 
@@ -80,7 +80,7 @@ Both HKU ROS 1 and chaoo0 ROS 2 return immediately from the IMU callback while `
 - Three independent four-second normal-rate prefixes each initialized at progress `3.3%`, then `40.0%`, and produced the same gravity `[4.4705, 0.2924, -8.7273]`.
 - Each run produced 35 poses. All three trajectory files are byte-identical with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`.
 - A later instrumented short run observed two IMU callbacks before the first LiDAR callback; callback placement can vary, while the timestamp-selected initialization result remains the same.
-- These short runs establish deterministic startup for this prefix, not full-sequence repeatability or accuracy. The full three-run Outdoor01 regression remains required.
+- These short runs established deterministic startup for the prefix. Full-sequence results are reported below.
 
 ## A-003 and A-004: TF construction and shutdown race
 
@@ -100,9 +100,35 @@ The implementation now creates the ROS node explicitly in `main`, passes the val
 - Idle PCL-ABI-matched ASan node interrupted by a single launch-forwarded SIGINT: mapper finished cleanly, with no ASan finding.
 - ASan execution was slower than the sensor stream and emitted synchronization warnings, so these runs validate memory/lifecycle behavior only; they are not runtime or estimator-accuracy evidence.
 
+## Full Outdoor01 regression after A-001 through A-005
+
+All three trials used the frozen Phase 1 normal-rate protocol, independent ROS domain IDs and output directories, and no concurrent build or data audit.
+
+| Metric | Run 1 | Run 2 | Run 3 |
+|---|---:|---:|---:|
+| Output poses / LIO map updates | 4,114 | 4,114 | 4,114 |
+| First output timestamp | 1735888008.319917 | same | same |
+| Last output timestamp | 1735888419.619859 | same | same |
+| Position ATE RMSE (m) | 0.274319 | 0.274319 | 0.274319 |
+| Position RPE 1 s RMSE (m) | 0.032148 | 0.032148 | 0.032148 |
+| Position RPE 5 s RMSE (m) | 0.072829 | 0.072829 | 0.072829 |
+| Position RPE 10 s RMSE (m) | 0.113196 | 0.113196 | 0.113196 |
+| Mean frame time (ms) | 19.486 | 19.470 | 19.362 |
+| p99 frame time (ms) | 36.836 | 36.173 | 37.254 |
+| Wall duration (s) | 418 | 418 | 418 |
+
+- The three trajectory files are byte-identical with SHA-256 `e378283efe00f262881182782d9ce82a0e5abcb865b35ef398ce4f405f22999b`.
+- Pairwise position RMSE and maximum error are exactly zero. The reported approximately `2.08e-8` rad quaternion comparison value is floating-point normalization noise on identical text files, not trajectory divergence.
+- Position ATE and 1/5/10-second RPE sample coefficients of variation are all zero, passing the predeclared 1% repeatability gate on this host and sequence.
+- The initial callback-dependent buffer contained 2, 3, and 3 IMUs respectively, while initialization progress and gravity were identical. This is direct evidence that callback placement varied but no longer selected the initialization sample set.
+- Every run had two initial empty-point updates, zero IMU/LiDAR loopbacks, zero synchronization warnings, full end-time coverage, and clean mapper shutdown.
+- The new timestamp policy completes initialization one LiDAR frame earlier than the old baseline and therefore produces one additional pose. Its ATE is 0.042% above the best old run and 2.17% below the other two old runs. These comparisons do not establish an accuracy improvement; they show no material position-accuracy regression while removing the measured nondeterminism.
+- The machine-readable three-run summary is stored at `results/phase2_hku_ros2_audit/Outdoor01/three_run_summary.json` outside the source repository and has SHA-256 `20a01699c51d90484f1ed81208746b9aab851c67b637d0268f4a70d71ad320e0`.
+- The available GT remains position-only. None of these results validates rotational accuracy or full SE(3) accuracy.
+
 ## Next audit actions
 
-1. Commit A-003/A-004/A-005 separately from the completed A-001 build fix.
-2. Define and test a timestamp-based first-IMU policy for A-002.
-3. Re-run full Outdoor01 three times before accepting any repeatability claim.
-4. Continue through IMU propagation, LiDAR update, covariance, voxel-map feedback, publication timestamps, and the visual path only after the input/lifecycle layer is stable.
+1. Audit output sensor timestamps and frame conventions; wall-clock publication stamps cannot support deterministic offline association.
+2. Audit buffer loopback/reset handling and all shared deque invariants.
+3. Continue through IMU propagation and de-skew, LiDAR update/Jacobians, covariance, and voxel-map feedback.
+4. Audit and test the visual path only after the LIO control flow and mathematical contracts are stable.
