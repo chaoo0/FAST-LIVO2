@@ -34,9 +34,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64|ARM|AARCH64)")
   endif()
   add_definitions(-DARM_ARCH)
 else()
-  # x86-64 (Intel/AMD) optimizations
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -mtune=native -funroll-loops") #-flto
-  message(STATUS "Using general x86 optimizations: -O3 -march=native -mtune=native -funroll-loops") 
+  # Do not enable a wider Eigen alignment ABI than the prebuilt PCL libraries.
+  # On AVX-capable hosts, -march=native changes Eigen's default alignment from
+  # 16 to 32 bytes. Point clouds allocated inside a distro PCL shared library
+  # can then be released by this binary with an incompatible allocator ABI.
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -mtune=native -funroll-loops") #-flto
+  message(STATUS "Using ABI-safe x86 optimizations: -O3 -mtune=native -funroll-loops")
   add_definitions(-DX86_ARCH)
 endif()
 
