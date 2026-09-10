@@ -781,6 +781,7 @@ void LIVMapper::RGBpointBodyToWorld(PointType const *const pi, PointType *const 
 void LIVMapper::standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg)
 {
   if (!lidar_en) return;
+  deque<sensor_msgs::msg::Imu::ConstSharedPtr> buffered_initial_imus;
   mtx_buffer.lock();
   // cout<<"got feature"<<endl;
   if (stamp2Sec(msg->header.stamp) < last_timestamp_lidar)
@@ -794,14 +795,25 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstShare
   lid_raw_data_buffer.push_back(ptr);
   lid_header_time_buffer.push_back(stamp2Sec(msg->header.stamp));
   last_timestamp_lidar = stamp2Sec(msg->header.stamp);
+  if (first_timestamp_lidar < 0.0)
+  {
+    first_timestamp_lidar = last_timestamp_lidar;
+    buffered_initial_imus.swap(initial_imu_buffer);
+  }
 
   mtx_buffer.unlock();
+  if (!buffered_initial_imus.empty())
+  {
+    RCLCPP_INFO(this->node->get_logger(), "Replaying %zu IMU messages buffered before the first LiDAR callback", buffered_initial_imus.size());
+  }
+  for (const auto &imu : buffered_initial_imus) imu_cbk(imu);
   sig_buffer.notify_all();
 }
 
 void LIVMapper::livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr &msg_in)
 {
   if (!lidar_en) return;
+  deque<sensor_msgs::msg::Imu::ConstSharedPtr> buffered_initial_imus;
   mtx_buffer.lock();
   livox_ros_driver2::msg::CustomMsg::SharedPtr msg(new livox_ros_driver2::msg::CustomMsg(*msg_in));
   // if ((abs(stamp2Sec(msg->header.stamp) - last_timestamp_lidar) > 0.2 && last_timestamp_lidar > 0) || sync_jump_flag)
@@ -837,8 +849,18 @@ void LIVMapper::livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::ConstShar
   lid_raw_data_buffer.push_back(ptr);
   lid_header_time_buffer.push_back(cur_head_time);
   last_timestamp_lidar = cur_head_time;
+  if (first_timestamp_lidar < 0.0)
+  {
+    first_timestamp_lidar = cur_head_time;
+    buffered_initial_imus.swap(initial_imu_buffer);
+  }
 
   mtx_buffer.unlock();
+  if (!buffered_initial_imus.empty())
+  {
+    RCLCPP_INFO(this->node->get_logger(), "Replaying %zu IMU messages buffered before the first LiDAR callback", buffered_initial_imus.size());
+  }
+  for (const auto &imu : buffered_initial_imus) imu_cbk(imu);
   sig_buffer.notify_all();
 }
 
@@ -846,7 +868,26 @@ void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
 {
   if (!imu_en) return;
 
-  if (last_timestamp_lidar < 0.0) return;
+  double first_lidar_time = -1.0;
+  {
+    std::lock_guard<std::mutex> lock(mtx_buffer);
+    if (first_timestamp_lidar < 0.0)
+    {
+      if (initial_imu_buffer.size() == MAX_INITIAL_IMU_BUFFER_SIZE)
+      {
+        initial_imu_buffer.pop_front();
+        if (!initial_imu_buffer_overflow_warned)
+        {
+          RCLCPP_WARN(this->node->get_logger(), "Initial IMU buffer reached %zu messages; dropping oldest samples until LiDAR arrives", MAX_INITIAL_IMU_BUFFER_SIZE);
+          initial_imu_buffer_overflow_warned = true;
+        }
+      }
+      initial_imu_buffer.push_back(msg_in);
+      return;
+    }
+    first_lidar_time = first_timestamp_lidar;
+  }
+
   RCLCPP_INFO(this->node->get_logger(), "get imu at time: %.6f", stamp2Sec(msg_in->header.stamp));
   sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
   msg->header.stamp = sec2Stamp(stamp2Sec(msg->header.stamp) - imu_time_offset);
@@ -859,6 +900,10 @@ void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
 
   if (ros_driver_fix_en) timestamp += std::round(last_timestamp_lidar - timestamp);
   msg->header.stamp = sec2Stamp(timestamp);
+
+  // The first scan can only be propagated with IMU samples at or after its
+  // header time.  Apply this timestamp rule independently of callback order.
+  if (timestamp < first_lidar_time) return;
 
   mtx_buffer.lock();
 

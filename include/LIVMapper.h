@@ -30,6 +30,8 @@ which is included as part of this source code package.
 class LIVMapper
 {
 public:
+  static constexpr std::size_t MAX_INITIAL_IMU_BUFFER_SIZE = 10000;
+
   explicit LIVMapper(const rclcpp::Node::SharedPtr &node);
   ~LIVMapper();
   void initializeSubscribersAndPublishers(image_transport::ImageTransport &image_transport);
@@ -84,6 +86,7 @@ public:
   double res_mean_last = 0.05;
   double gyr_cov = 0, acc_cov = 0, inv_expo_cov = 0;
   double blind_rgb_points = 0.0;
+  double first_timestamp_lidar = -1.0;
   double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0, last_timestamp_img = -1.0;
   double filter_size_surf_min = 0;
   double filter_size_pcd = 0;
@@ -125,6 +128,8 @@ public:
   double img_time_offset = 0.0;
   deque<PointCloudXYZI::Ptr> lid_raw_data_buffer;
   deque<double> lid_header_time_buffer;
+  deque<sensor_msgs::msg::Imu::ConstSharedPtr> initial_imu_buffer;
+  bool initial_imu_buffer_overflow_warned = false;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
   deque<cv::Mat> img_buffer;
   deque<double> img_time_buffer;

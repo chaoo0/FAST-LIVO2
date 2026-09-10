@@ -17,7 +17,7 @@ Every item is kept separate until it has a source location, reference comparison
 | ID | Classification | Status | Summary |
 |---|---|---|---|
 | A-001 | upstream build portability defect | fixed, short regression passed, full regression pending | x86 `-march=native` creates an Eigen/PCL allocator ABI mismatch |
-| A-002 | upstream arrival-order assumption exposed by ROS 2 execution | confirmed, unfixed | pre-LiDAR IMU acceptance depends on callback scheduling rather than timestamps |
+| A-002 | upstream arrival-order assumption exposed by ROS 2 execution | fixed, short regression passed, full regression pending | pre-LiDAR IMU acceptance depended on callback scheduling rather than timestamps |
 | A-003 | ROS 2 port defect | fixed, short regression passed, full regression pending | TF broadcaster was reconstructed on every odometry publication |
 | A-004 | ROS 2 shutdown race | fixed, short regression passed, full regression pending | shutdown could invalidate the ROS context between loop check, `spin_some`, and publication |
 | A-005 | ROS 2 port defect | fixed, short regression passed, full regression pending | `main.cpp` constructed an `ImageTransport` from a null node pointer |
@@ -64,7 +64,23 @@ Both HKU ROS 1 and chaoo0 ROS 2 return immediately from the IMU callback while `
 - The resulting initial gravity values differed, and Run 1 later differed from Runs 2/3 by 0.258 m pairwise position RMSE.
 - A debugger run showed the first LiDAR callback followed by nine accepted IMUs for the first update; prior IMUs had already been discarded.
 
-【推断】ROS 2 per-subscription delivery and `spin_some` timing select a different initial sample prefix across runs. A deterministic timestamp policy must be specified before changing this behavior; simply retaining every pre-LiDAR IMU could change the initialization interval and is not yet accepted as the fix.
+【推断】ROS 2 per-subscription delivery and `spin_some` timing selected a different initial sample prefix across runs.
+
+### Timestamp evidence and policy
+
+- In `Outdoor01_ros2`, 12 IMU storage records precede the first LiDAR storage record.
+- The first IMU header time is `1735888008.064248085`. The first LiDAR header time is `1735888008.019938469`, although that LiDAR message was stored at `1735888008.120844603`, about 100.906 ms after its scan-start header time.
+- Therefore, those early IMUs are not pre-scan measurements: they lie inside the first LiDAR scan interval and were discarded only because their callbacks ran before the LiDAR callback.
+- The accepted startup set is now defined by corrected sensor time, `t_imu >= t_lidar,0`, rather than callback arrival. IMUs received before the first valid LiDAR callback are buffered and replayed in per-topic order once `t_lidar,0` is known. Older corrected samples are rejected.
+- The startup buffer is bounded at 10,000 messages and drops the oldest sample with a warning if LiDAR never arrives; this prevents an unbounded failure mode.
+
+### Short regression evidence
+
+- Clean ROS 2 Humble Release build: pass.
+- Three independent four-second normal-rate prefixes each initialized at progress `3.3%`, then `40.0%`, and produced the same gravity `[4.4705, 0.2924, -8.7273]`.
+- Each run produced 35 poses. All three trajectory files are byte-identical with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`.
+- A later instrumented short run observed two IMU callbacks before the first LiDAR callback; callback placement can vary, while the timestamp-selected initialization result remains the same.
+- These short runs establish deterministic startup for this prefix, not full-sequence repeatability or accuracy. The full three-run Outdoor01 regression remains required.
 
 ## A-003 and A-004: TF construction and shutdown race
 
