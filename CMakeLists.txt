@@ -200,6 +200,7 @@ install(
 
 install(PROGRAMS
   scripts/audit_m3dgr_bag.py
+  scripts/audit_m3dgr_gt.py
   scripts/evaluate_m3dgr_position.py
   scripts/run_m3dgr_lio_baseline.sh
   scripts/summarize_m3dgr_runs.py
@@ -220,6 +221,11 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_parameter_utils test/test_parameter_utils.cpp)
   target_include_directories(test_parameter_utils PRIVATE include)
+
+  ament_add_gtest(test_preprocess_timestamps test/test_preprocess_timestamps.cpp)
+  target_include_directories(test_preprocess_timestamps PRIVATE include)
+  ament_target_dependencies(test_preprocess_timestamps pcl_conversions sensor_msgs)
+  target_link_libraries(test_preprocess_timestamps pre ${PCL_LIBRARIES})
 endif()
 
 # Export dependencies

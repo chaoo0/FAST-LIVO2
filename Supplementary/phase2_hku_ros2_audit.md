@@ -24,11 +24,12 @@ Every item is kept separate until it has a source location, reference comparison
 | A-006 | upstream output-time contract defect | fixed, short regression passed | state-derived ROS messages used publication wall time instead of the state measurement time |
 | A-007 | ROS 2 port defect | fixed, zero-offset M3DGR regression passed | ROS 2 dropped the official IMU/LiDAR time-offset parameter contract |
 | A-008 | upstream output covariance defect | fixed, unit and short runtime regression passed | odometry published an all-zero covariance despite a nonzero internal ESIKF covariance |
-| A-009 | upstream output completeness limitation | under investigation | odometry twist and twist covariance remain default zero although velocity is estimated |
+| A-009 | upstream output completeness limitation | confirmed; no unsafe partial fix applied | odometry twist and twist covariance remain default zero although velocity is estimated |
 | A-010 | ROS 2 port defect | fixed, ownership tests passed; LIVO replay pending | queued images could outlive the ROS message storage shared by their `cv::Mat` |
 | A-011 | ROS 2 port defect | fixed, unit/synthetic/normal regression passed | one IMU gap over 0.2 s caused every later IMU message to be rejected |
 | A-012 | upstream input-buffer defect | fixed, synthetic and normal regressions passed | LiDAR time reversal cleared only clouds, not their paired timestamps; unusable scans could stall the queue |
 | A-013 | ROS 2 port defect | fixed, unit/runtime/normal regression passed | source read `lio.min_iterations` while upstream and shipped configurations set `lio.max_iterations` |
+| A-014 | ROS 2 port defect | fixed, synthetic/normal regression passed | Ouster point-time sorting was removed and Pandar128 absolute time/schema replaced the required relative scan-time contract |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -195,6 +196,22 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - 【未知】Positive semidefiniteness of one sample does not establish covariance consistency. NEES/NIS or empirical coverage against reliable full-pose GT remains required before using this covariance as a calibrated confidence signal.
 - Twist fields are deliberately unchanged in this fix. Their frame and covariance require a separate contract (A-009).
 
+## A-009: odometry twist is not a valid velocity estimate
+
+### Contract and source evidence
+
+- The installed ROS 2 `nav_msgs/msg/Odometry` definition requires pose in `header.frame_id` and twist in `child_frame_id`.
+- Both the frozen HKU source and ROS 2 port leave `/aft_mapped_to_init.twist` and its covariance at their default zeros, even though `_state.vel_end` is estimated and explicitly documented as world-frame velocity.
+- The optional `/LIVO2/imu_propagate` path writes that world-frame velocity into `twist.linear`, sets `header.frame_id = world`, and leaves `child_frame_id` empty. That is not the required child-frame twist contract.
+
+### Why no partial patch is accepted
+
+- A body-frame linear velocity can be computed as `R_world_body^T * v_world`, but its covariance is not merely a reordered state sub-block. Its first-order Jacobian includes both velocity and right/body rotation error: `delta_v_body = skew(v_body) * delta_theta_body + R_world_body^T * delta_v_world`.
+- The filter does not carry angular velocity as a state. A correct angular component requires a measurement-time raw gyroscope sample minus the posterior bias, plus a declared noise/cross-covariance model. The cached propagation angular rate was bias-corrected using the prior state and is not automatically posterior-consistent after the LiDAR update.
+- Filling only selected fields while leaving zero angular velocity/covariance would continue to assert false certainty and could break downstream consumers. Therefore A-009 is recorded as a confirmed output limitation rather than disguised as a complete fix.
+
+【影响】This does not change the internal ESIKF pose trajectory or map, but `/aft_mapped_to_init` must not be used as a trusted six-degree-of-freedom twist source. A future publication-interface change requires an explicit frame/noise contract and consumer regression; Mamba diagnostics must read the audited estimator state directly rather than infer motion from this zero twist.
+
 ## A-010: queued image lifetime lost in the ROS 2 port
 
 ### Source comparison and failure mechanism
@@ -265,9 +282,27 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - A normal Outdoor01 short replay produced 35 poses byte-identical to A-008/A-012, with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`, and the mapper exited cleanly.
 - 【未知】Iteration counts other than 5 are now wired correctly but have not been claimed to improve accuracy or convergence. They require parameter-sweep evidence and must not be tuned on the frozen test bags.
 
+## A-014: broken Ouster/Pandar128 per-point time contract
+
+### Source comparison and failure mechanism
+
+- The frozen HKU Ouster path sorts output points by their per-point time. The ROS 2 port removed that sort. `sync_packages()` uses the last point's offset as scan end time, and `UndistortPcl()` traverses points backward assuming nondecreasing offsets; unordered input therefore selects the wrong time bound and applies motion compensation in the wrong temporal order.
+- The frozen HKU Pandar128 point schema is `x/y/z float32, intensity uint8, timestamp float64, ring uint16`. The ROS 2 port changed it to `timestamp float32, ring uint8`, omitted intensity from both the struct and PCL registration, and then computed `curvature = timestamp * 1000` rather than `(timestamp - first_timestamp) * 1000` milliseconds.
+- With a synthetic scan whose point timestamps are `100.00, 100.02, 100.01` s, the broken formula produces offsets near 100,000 ms, so a header at 100 s is interpreted as ending near 200 s instead of 100.02 s. Synchronization can then wait for IMU data far outside the scan and de-skew uses an invalid duration.
+- M3DGR MID360 uses the Livox CustomMsg handler, so neither broken branch is exercised by the accepted MID360 regression. This is a ROS 2 portability defect, not an explanation for the existing M3DGR trajectory.
+
+### Fix and verification
+
+- Restore Ouster time sorting.
+- Restore the upstream Pandar128 PointField types, intensity mapping, relative scan time, and sorting; accept an empty Pandar cloud without indexing point zero.
+- Three PointCloud2-level tests cover unordered Ouster offsets, Pandar field/time/intensity conversion, and an empty Pandar cloud. The complete suite passes: 20 tests, 0 errors, 0 failures, 0 skipped.
+- Clean ROS 2 Humble Release build passes.
+- A normal-rate Outdoor01 MID360 prefix produced 61 poses and exited cleanly. Its first 35 poses are byte-identical to the pre-A-014 A-013 reference, with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`.
+- 【未知】No real Ouster or Pandar128 bag has been replayed. The repair has official-source parity and synthetic PointCloud2 evidence, not dataset-level accuracy evidence for those sensors.
+
 ## Next audit actions
 
-1. Audit odometry twist semantics separately; do not infer angular velocity or its covariance from an unstated time/frame contract.
-2. Audit buffer loopback/reset handling and all shared deque invariants.
-3. Continue through IMU propagation and de-skew, LiDAR update/Jacobians, covariance, and voxel-map feedback.
+1. Continue through IMU propagation and de-skew, including per-point time monotonicity and propagation-bound invariants.
+2. Audit LiDAR point-to-plane residuals/Jacobians, covariance update, convergence criteria, and voxel-map feedback.
+3. Add diagnostics only after their mathematical frame/time contracts are written; do not create a Mamba module.
 4. Audit and test the visual path only after the LIO control flow and mathematical contracts are stable.

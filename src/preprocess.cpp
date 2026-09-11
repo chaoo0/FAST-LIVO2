@@ -15,6 +15,16 @@ which is included as part of this source code package.
 #define RETURN0 0x00
 #define RETURN0AND1 0x10
 
+namespace
+{
+
+bool pointOffsetLess(const PointType & first, const PointType & second)
+{
+  return first.curvature < second.curvature;
+}
+
+}  // namespace
+
 Preprocess::Preprocess() : feature_enabled(0), lidar_type(AVIA), blind(0.01), point_filter_num(1)
 {
   inf_bound = 10;
@@ -332,6 +342,7 @@ void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2::ConstShared
 
       pl_surf.points.push_back(added_pt);
     }
+    std::sort(pl_surf.points.begin(), pl_surf.points.end(), pointOffsetLess);
   }
   // pub_func(pl_surf, pub_full, msg->header.stamp);
   // pub_func(pl_surf, pub_corn, msg->header.stamp);
@@ -516,7 +527,9 @@ void Preprocess::Pandar128_handler(const sensor_msgs::msg::PointCloud2::ConstSha
   int plsize = pl_orig.points.size();
   pl_surf.reserve(plsize);
 
-  // double time_head = pl_orig.points[0].timestamp;
+  if (pl_orig.empty()) return;
+
+  const double time_head = pl_orig.points[0].timestamp;
   for (int i = 0; i < plsize; i++)
   {
     PointType added_pt;
@@ -527,7 +540,8 @@ void Preprocess::Pandar128_handler(const sensor_msgs::msg::PointCloud2::ConstSha
     added_pt.x = pl_orig.points[i].x;
     added_pt.y = pl_orig.points[i].y;
     added_pt.z = pl_orig.points[i].z;
-    added_pt.curvature = pl_orig.points[i].timestamp * 1000.f;
+    added_pt.intensity = static_cast<float>(pl_orig.points[i].intensity) / 255.0f;
+    added_pt.curvature = (pl_orig.points[i].timestamp - time_head) * 1000.0;
 
     if (i % point_filter_num == 0)
     {
@@ -540,14 +554,7 @@ void Preprocess::Pandar128_handler(const sensor_msgs::msg::PointCloud2::ConstSha
     }
   }
 
-  // define a lambda function for the comparison
-  auto comparePoints = [](const PointType& a, const PointType& b) -> bool
-  {
-    return a.curvature < b.curvature;
-  };
-  
-  // sort the points using the comparison function
-  std::sort(pl_surf.points.begin(), pl_surf.points.end(), comparePoints);
+  std::sort(pl_surf.points.begin(), pl_surf.points.end(), pointOffsetLess);
   
   // cout << GREEN << "pl_surf.points[0].timestamp: " << pl_surf.points[0].curvature << RESET << endl;
   // cout << GREEN << "pl_surf.points[1000].timestamp: " << pl_surf.points[1000].curvature << RESET << endl;
