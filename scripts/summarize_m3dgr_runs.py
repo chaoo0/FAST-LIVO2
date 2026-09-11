@@ -27,7 +27,11 @@ def rotation_distances_xyzw(first, second):
     first = first / np.linalg.norm(first, axis=1)[:, None]
     second = second / np.linalg.norm(second, axis=1)[:, None]
     dots = np.abs(np.sum(first * second, axis=1))
-    return 2.0 * np.arccos(np.clip(dots, 0.0, 1.0))
+    dots = np.clip(dots, 0.0, 1.0)
+    # An identical quaternion can land one ulp below one after normalization;
+    # arccos would amplify that round-off into a fictitious ~1e-8 rad error.
+    dots[np.abs(1.0 - dots) <= 8.0 * np.finfo(float).eps] = 1.0
+    return 2.0 * np.arccos(dots)
 
 
 def run_report(directory):

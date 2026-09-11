@@ -209,6 +209,7 @@ install(PROGRAMS
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   ament_add_gtest(test_covariance_utils test/test_covariance_utils.cpp)
   target_include_directories(test_covariance_utils PRIVATE include)
   target_link_libraries(test_covariance_utils Eigen3::Eigen)
@@ -226,6 +227,11 @@ if(BUILD_TESTING)
   target_include_directories(test_preprocess_timestamps PRIVATE include)
   ament_target_dependencies(test_preprocess_timestamps pcl_conversions sensor_msgs)
   target_link_libraries(test_preprocess_timestamps pre ${PCL_LIBRARIES})
+
+  add_test(
+    NAME test_summarize_m3dgr_runs
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_summarize_m3dgr_runs.py
+  )
 endif()
 
 # Export dependencies

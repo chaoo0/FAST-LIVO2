@@ -30,6 +30,8 @@ Every item is kept separate until it has a source location, reference comparison
 | A-012 | upstream input-buffer defect | fixed, synthetic and normal regressions passed | LiDAR time reversal cleared only clouds, not their paired timestamps; unusable scans could stall the queue |
 | A-013 | ROS 2 port defect | fixed, unit/runtime/normal regression passed | source read `lio.min_iterations` while upstream and shipped configurations set `lio.max_iterations` |
 | A-014 | ROS 2 port defect | fixed, synthetic/normal regression passed | Ouster point-time sorting was removed and Pandar128 absolute time/schema replaced the required relative scan-time contract |
+| A-015 | upstream point-covariance frame defect | fixed, mathematical/unit/full Outdoor01 regression passed; cross-sequence validation pending | map-point pose uncertainty omitted the world rotation and rotation-position cross covariance |
+| A-016 | audit-tool numerical reporting defect | fixed, unit-tested | pairwise comparison amplified one-ulp quaternion normalization noise into a fictitious nonzero angle |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -300,9 +302,34 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - A normal-rate Outdoor01 MID360 prefix produced 61 poses and exited cleanly. Its first 35 poses are byte-identical to the pre-A-014 A-013 reference, with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`.
 - 【未知】No real Ouster or Pandar128 bag has been replayed. The repair has official-source parity and synthetic PointCloud2 evidence, not dataset-level accuracy evidence for those sensors.
 
+## A-015: inconsistent world-frame map-point covariance
+
+### Source locations and classification
+
+- The defect is present in both the frozen HKU source and the ROS 2 port in `VoxelMapManager::StateEstimation()` and `VoxelMapManager::BuildVoxelMap()`. The same expression is repeated before `UpdateVoxelMap()` in `LIVMapper::handleLIO()`, so this is classified as an upstream algorithm defect rather than a ROS 2 migration defect.
+- The initial-map path also formed the rotation Jacobian from the raw LiDAR point, whereas the estimated pose rotates the IMU-frame point `p_i = R_il p_l + t_il`. It therefore ignored both the LiDAR-to-IMU rotation and translation in that part of the uncertainty propagation.
+
+### Mathematical explanation and trigger
+
+- `StatesGroup::operator+=` defines a right rotation perturbation and a world-frame position perturbation: `R_new = R Exp(delta_theta_body)` and `t_new = t + delta_t_world`.
+- For `p_w = R_wi p_i + t_wi`, first-order perturbation gives `delta p_w = -R_wi [p_i]_x delta_theta_body + delta t_world`. The full pose Jacobian is therefore `J_pose = [-R_wi [p_i]_x, I]`.
+- The old implementation used `-[p_i]_x P_rr (-[p_i]_x)^T + P_tt` and added that result to a world-frame LiDAR point covariance. It omitted the leading `R_wi`, omitted `P_rt/P_tr`, and in the initial-map path used the wrong point in the skew matrix. The result is not equivariant to a change of world basis.
+- The defect is triggered whenever the attitude is non-identity, the pose covariance has rotation-position cross terms, or the LiDAR-to-IMU extrinsic is nontrivial. It changes point-to-plane association uncertainty and voxel-plane uncertainty; those quantities affect residual acceptance and are then written into the persistent map, so the impact can feed forward into later estimates.
+
+### Fix and verification
+
+- Added one shared `worldPointCovariance()` implementation and replaced all three inconsistent propagation sites. It rotates the LiDAR point covariance with `R_wi R_il`, uses the full state covariance through `J_pose P J_pose^T`, and only symmetrizes the derived 3x3 point covariance to remove floating-point asymmetry.
+- Three independent checks cover the analytic covariance expression, a central finite-difference Jacobian for the actual right perturbation, and covariance equivariance under an arbitrary world-frame rotation.
+- ROS 2 Humble Release build passes. The complete suite passes: 24 tests, 0 errors, 0 failures, 0 skipped; this includes the finite-difference/equivariance covariance tests and the quaternion-comparison tool tests.
+- A normal-rate 10 s Outdoor01 prefix produced 95 finite eight-field poses without a time-jump or queue-invariant diagnostic. Against the first 35 timestamp-identical pre-A-015 poses, the unoptimized diagnostic implementation changed position by 3.411 mm RMSE (5.907 mm maximum) and orientation by 1.166 mrad RMSE (3.509 mrad maximum).
+- The production implementation was then reduced from a per-point 3x19 multiplication to the mathematically identical 3x6 pose block. The optimized full Outdoor01 replay produced 4,114 poses in all three runs, with identical SHA-256 `f42ecf88c660b5c66ec30a5cae9e07bcc851ac39c4bd8bdcf572da27f8aa08d0`. Mean frame times were 18.889, 18.957, and 18.891 ms; p99 times were 34.455, 35.489, and 34.572 ms; no run had a shutdown SIGSEGV, loopback, or out-of-sync diagnostic. One maximum frame reached 116.308 ms, so the mean/p99 real-time margin passes but the maximum-frame bound does not become a hard guarantee.
+- Fixed-protocol position-only metrics were identical across the three optimized runs: ATE RMSE `0.271441 m`, RPE-1s `0.031956 m`, RPE-5s `0.072423 m`, and RPE-10s `0.112471 m`; sample CV was zero. Relative to the accepted pre-A-015 reference run (`0.274319/0.032148/0.072829/0.113196 m`), this is ATE -1.05%, RPE-1s -0.60%, RPE-5s -0.56%, and RPE-10s -0.64% for this one sequence. This is a small mixed-sequence result, not evidence of a general accuracy improvement or statistical significance.
+- A-016 fixes the repeatability comparator so identical printed quaternions are exactly zero distance within floating-point round-off; this changes reporting only, not trajectories or estimator code.
+- 【未知】The full result is still position-only because Outdoor01 GT orientations are identity. Dynamic/Varying-illu/Sha-turn full-pose GT audits are complete, but cross-sensor rigid-body alignment and resampled motion labels are not yet validated for a local 6D research target.
+
 ## Next audit actions
 
-1. Continue through IMU propagation and de-skew, including per-point time monotonicity and propagation-bound invariants.
-2. Audit LiDAR point-to-plane residuals/Jacobians, covariance update, convergence criteria, and voxel-map feedback.
+1. Extend the accepted A-015 LIO regression to the newly available Dynamic/Varying-illu/Sha-turn sequence matrix, using the audited GT files and recording frame/GT alignment limits per sequence.
+2. Continue the LiDAR point-to-plane residual/Jacobian, covariance-update, convergence, and zero-effective-feature audit.
 3. Add diagnostics only after their mathematical frame/time contracts are written; do not create a Mamba module.
 4. Audit and test the visual path only after the LIO control flow and mathematical contracts are stable.

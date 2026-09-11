@@ -11,6 +11,7 @@ which is included as part of this source code package.
 */
 
 #include "voxel_map.h"
+#include "utils/covariance_utils.h"
 #include "utils/parameter_utils.h"
 
 using namespace Eigen;
@@ -427,18 +428,15 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     double total_residual = 0.0;
     pcl::PointCloud<pcl::PointXYZI>::Ptr world_lidar(new pcl::PointCloud<pcl::PointXYZI>);
     TransformLidar(state_.rot_end, state_.pos_end, feats_down_body_, world_lidar);
-    M3D rot_var = state_.cov.block<3, 3>(0, 0);
-    M3D t_var = state_.cov.block<3, 3>(3, 3);
     for (size_t i = 0; i < feats_down_body_->size(); i++)
     {
       pointWithVar &pv = pv_list_[i];
       pv.point_b << feats_down_body_->points[i].x, feats_down_body_->points[i].y, feats_down_body_->points[i].z;
       pv.point_w << world_lidar->points[i].x, world_lidar->points[i].y, world_lidar->points[i].z;
 
-      M3D cov = body_cov_list_[i];
       M3D point_crossmat = cross_mat_list_[i];
-      cov = state_.rot_end * cov * state_.rot_end.transpose() + (-point_crossmat) * rot_var * (-point_crossmat.transpose()) + t_var;
-      pv.var = cov;
+      pv.var = fast_livo::worldPointCovariance(
+        body_cov_list_[i], state_.rot_end, extR_, point_crossmat, state_.cov);
       pv.body_var = body_cov_list_[i];
     }
     ptpl_list_.clear();
@@ -599,11 +597,11 @@ void VoxelMapManager::BuildVoxelMap()
     V3D point_this(feats_down_body_->points[i].x, feats_down_body_->points[i].y, feats_down_body_->points[i].z);
     M3D var;
     calcBodyCov(point_this, config_setting_.dept_err_, config_setting_.beam_err_, var);
+    const V3D point_imu = extR_ * point_this + extT_;
     M3D point_crossmat;
-    point_crossmat << SKEW_SYM_MATRX(point_this);
-    var = (state_.rot_end * extR_) * var * (state_.rot_end * extR_).transpose() +
-          (-point_crossmat) * state_.cov.block<3, 3>(0, 0) * (-point_crossmat).transpose() + state_.cov.block<3, 3>(3, 3);
-    pv.var = var;
+    point_crossmat << SKEW_SYM_MATRX(point_imu);
+    pv.var = fast_livo::worldPointCovariance(
+      var, state_.rot_end, extR_, point_crossmat, state_.cov);
     input_points.push_back(pv);
   }
 
