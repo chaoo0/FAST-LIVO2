@@ -214,6 +214,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_cv_bridge_lifetime test/test_cv_bridge_lifetime.cpp)
   ament_target_dependencies(test_cv_bridge_lifetime cv_bridge sensor_msgs)
+
+  ament_add_gtest(test_timestamp_utils test/test_timestamp_utils.cpp)
+  target_include_directories(test_timestamp_utils PRIVATE include)
 endif()
 
 # Export dependencies

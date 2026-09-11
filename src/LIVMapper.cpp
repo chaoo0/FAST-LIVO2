@@ -911,7 +911,17 @@ void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
 
   mtx_buffer.lock();
 
-  if (last_timestamp_imu > 0.0 && timestamp < last_timestamp_imu)
+  const fast_livo::TimestampOrder timestamp_order =
+    fast_livo::classifyTimestamp(last_timestamp_imu, timestamp, 0.2);
+  if (timestamp_order == fast_livo::TimestampOrder::kInvalid)
+  {
+    mtx_buffer.unlock();
+    sig_buffer.notify_all();
+    RCLCPP_ERROR(this->node->get_logger(), "rejecting IMU with a non-finite timestamp");
+    return;
+  }
+
+  if (timestamp_order == fast_livo::TimestampOrder::kBackward)
   {
     mtx_buffer.unlock();
     sig_buffer.notify_all();
@@ -919,12 +929,9 @@ void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
     return;
   }
 
-  if (last_timestamp_imu > 0.0 && timestamp > last_timestamp_imu + 0.2)
+  if (timestamp_order == fast_livo::TimestampOrder::kForwardGap)
   {
     RCLCPP_WARN(this->node->get_logger(), "imu time stamp Jumps %0.4lf seconds \n", timestamp - last_timestamp_imu);
-    mtx_buffer.unlock();
-    sig_buffer.notify_all();
-    return;
   }
 
   last_timestamp_imu = timestamp;

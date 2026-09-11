@@ -26,6 +26,7 @@ Every item is kept separate until it has a source location, reference comparison
 | A-008 | upstream output covariance defect | fixed, unit and short runtime regression passed | odometry published an all-zero covariance despite a nonzero internal ESIKF covariance |
 | A-009 | upstream output completeness limitation | under investigation | odometry twist and twist covariance remain default zero although velocity is estimated |
 | A-010 | ROS 2 port defect | fixed, ownership tests passed; LIVO replay pending | queued images could outlive the ROS message storage shared by their `cv::Mat` |
+| A-011 | ROS 2 port defect | fixed, unit/synthetic/normal regression passed | one IMU gap over 0.2 s caused every later IMU message to be rejected |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -208,6 +209,23 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - A regression test confirmed that the `toCvCopy()` matrix uses independent storage and preserves both test pixels after the ROS message expires.
 - Clean Release build and the complete current unit-test set passed: 7 tests, 0 errors, 0 failures, 0 skipped.
 - 【未知】No dataset-level LIVO replay is claimed here. Camera calibration and the published 0.1 s M3DGR image offset must be validated before a LIVO trajectory can serve as regression evidence.
+
+## A-011: permanent IMU rejection after one forward gap
+
+### Source comparison and failure mechanism
+
+- The frozen HKU callback contains a disabled/commented check for an IMU interval greater than 0.2 s. The ROS 2 migration enabled that branch and returns before updating `last_timestamp_imu`.
+- If the stored time is `t` and the next sample is `t + 0.3`, that sample is rejected and the stored time remains `t`. Every later monotonically increasing sample is also greater than `t + 0.2`, so the input remains permanently frozen without an explicit restart.
+- A forward gap indicates missing propagation data and must be reported, but it is not a time reversal. Silently freezing all later samples is neither recovery nor fail-closed state reinitialization.
+
+### Fix and verification
+
+- Classify first/in-order, forward-gap, backward, and invalid timestamps explicitly. Backward and non-finite IMU stamps remain rejected; a forward gap is warned and accepted so time can advance.
+- Three classifier tests cover the 0.2 s boundary, forward/backward distinction, and non-finite inputs.
+- A ROS 2 callback-level test sent a real Outdoor01 MID360 point cloud followed by IMU stamps at `8.064`, `8.364`, and `8.369` s within the same epoch. The 0.3 s interval produced one warning and all three messages were accepted.
+- Outdoor01 contains 82,312 IMU records with zero header inversions and an observed maximum gap of about 6.71 ms, so the 0.2 s branch is not exercised by the accepted baseline dataset.
+- A normal short replay produced 31 poses byte-identical to the first 31 poses of the A-008 reference. Both prefixes have SHA-256 `d95c51ba6ad9a8e7574ef540013cbda368b5b1a2f5ae06d9ee6963832286070d`; the mapper exited cleanly with no time-jump or loopback warning.
+- 【未知】Accepting data after a large gap prevents the permanent software freeze but does not make the propagated state accurate across missing IMU coverage. Gap duration must become a diagnostic/failure input, and accuracy after such gaps requires a separate controlled experiment.
 
 ## Next audit actions
 

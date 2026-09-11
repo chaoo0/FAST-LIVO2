@@ -27,6 +27,7 @@ which is included as part of this source code package.
 #include <nav_msgs/msg/path.hpp>
 #include <vikit/camera_loader.h>
 #include "utils/covariance_utils.h"
+#include "utils/timestamp_utils.h"
 
 class LIVMapper
 {
