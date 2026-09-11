@@ -23,7 +23,8 @@ Every item is kept separate until it has a source location, reference comparison
 | A-005 | ROS 2 port defect | fixed, full Outdoor01 LIO regression passed; LIVO pending | `main.cpp` constructed an `ImageTransport` from a null node pointer |
 | A-006 | upstream output-time contract defect | fixed, short regression passed | state-derived ROS messages used publication wall time instead of the state measurement time |
 | A-007 | ROS 2 port defect | fixed, zero-offset M3DGR regression passed | ROS 2 dropped the official IMU/LiDAR time-offset parameter contract |
-| A-008 | upstream output covariance defect | confirmed, unfixed | odometry publishes an all-zero covariance despite a nonzero internal ESIKF covariance |
+| A-008 | upstream output covariance defect | fixed, unit and short runtime regression passed | odometry published an all-zero covariance despite a nonzero internal ESIKF covariance |
+| A-009 | upstream output completeness limitation | under investigation | odometry twist and twist covariance remain default zero although velocity is estimated |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -172,9 +173,27 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - The mapper finished cleanly with no loopback or synchronization warning.
 - 【未知】A real standard-PointCloud2 dataset with a calibrated nonzero LiDAR offset has not yet been replayed, so that branch has source-parity and build evidence but not dataset-level validation.
 
+## A-008: zero odometry pose covariance
+
+### Source and coordinate contract
+
+- `StatesGroup::operator+` applies rotation error on the right, `R_new = R Exp(delta_theta_body)`, while position error is added directly in the world frame. The state covariance pose order is therefore `[delta_theta_body, delta_p_world]`.
+- ROS `PoseWithCovariance` uses row-major order `[x, y, z, rotation about fixed X, fixed Y, fixed Z]` according to [REP-103](https://github.com/openrobotics/reps/blob/main/_posts/rep-0103.md), and the odometry pose is expressed in `header.frame_id`.
+- For small errors, `R Exp(delta_theta_body) = Exp(R delta_theta_body) R`; therefore the published fixed/world-axis rotation error is `delta_theta_world = R delta_theta_body`.
+- The 6D mapping uses the reordered covariance and `J = diag(I, R)`, including the position-rotation cross terms. Only the published 6x6 copy is symmetrized to remove round-off asymmetry; the filter covariance is not modified.
+
+### Verification
+
+- Added three unit tests covering identity-frame reordering, a 90-degree body-to-world tangent rotation, and cross-covariance transformation/symmetry. All passed.
+- A runtime odometry sample contained 36 finite, nonzero covariance entries and was exactly symmetric. Its diagonal was approximately `[1.209e-5, 5.931e-6, 4.456e-6, 3.817e-7, 5.818e-7, 8.987e-7]` in `[m^2, rad^2]` order.
+- The six eigenvalues were positive for that sample; the smallest was approximately `1.62e-7`.
+- The 35-pose trajectory remained byte-identical to the pre-A-008 run with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`, and the mapper finished cleanly.
+- 【未知】Positive semidefiniteness of one sample does not establish covariance consistency. NEES/NIS or empirical coverage against reliable full-pose GT remains required before using this covariance as a calibrated confidence signal.
+- Twist fields are deliberately unchanged in this fix. Their frame and covariance require a separate contract (A-009).
+
 ## Next audit actions
 
-1. Audit output sensor timestamps and frame conventions; wall-clock publication stamps cannot support deterministic offline association.
+1. Audit odometry twist semantics separately; do not infer angular velocity or its covariance from an unstated time/frame contract.
 2. Audit buffer loopback/reset handling and all shared deque invariants.
 3. Continue through IMU propagation and de-skew, LiDAR update/Jacobians, covariance, and voxel-map feedback.
 4. Audit and test the visual path only after the LIO control flow and mathematical contracts are stable.

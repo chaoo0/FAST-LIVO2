@@ -1417,6 +1417,16 @@ void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry
   odomAftMapped.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
   set_posestamp(odomAftMapped.pose.pose);
 
+  const Eigen::Matrix<double, 6, 6> pose_covariance =
+    fast_livo::poseCovarianceInRosOrder(_state.cov, _state.rot_end);
+  for (int row = 0; row < 6; ++row)
+  {
+    for (int column = 0; column < 6; ++column)
+    {
+      odomAftMapped.pose.covariance[row * 6 + column] = pose_covariance(row, column);
+    }
+  }
+
   tf2::Transform transform;
   tf2::Quaternion q;
   transform.setOrigin(tf2::Vector3(_state.pos_end(0), _state.pos_end(1), _state.pos_end(2)));

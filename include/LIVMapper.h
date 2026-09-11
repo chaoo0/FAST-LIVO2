@@ -26,6 +26,7 @@ which is included as part of this source code package.
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <vikit/camera_loader.h>
+#include "utils/covariance_utils.h"
 
 class LIVMapper
 {
