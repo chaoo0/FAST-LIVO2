@@ -327,6 +327,24 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - A-016 fixes the repeatability comparator so identical printed quaternions are exactly zero distance within floating-point round-off; this changes reporting only, not trajectories or estimator code.
 - 【未知】The full result is still position-only because Outdoor01 GT orientations are identity. Dynamic/Varying-illu/Sha-turn full-pose GT audits are complete, but cross-sensor rigid-body alignment and resampled motion labels are not yet validated for a local 6D research target.
 
+### First-pass regression on the six additional M3DGR sequences
+
+The same optimized LIO binary, M3DGR MID360 configuration, position-only alignment protocol, and single normal-speed replay were used for each sequence. Varying-illu02 uses the frozen official GT copy because the local same-named file was previously shown to be a different sequence.
+
+| Sequence | LiDAR input | Output poses | ATE RMSE (m) | RPE 1 s (m) | RPE 5 s (m) | RPE 10 s (m) | Mean / p99 frame (ms) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Dynamic01 | 1,752 | 1,749 | 0.141734 | 0.029921 | 0.111994 | 0.185504 | 24.056 / 31.603 |
+| Dynamic02 | 1,502 | 1,499 | 0.137626 | 0.030827 | 0.113869 | 0.175315 | 23.367 / 32.299 |
+| Varying-illu01 | 1,541 | 1,538 | 0.139514 | 0.033722 | 0.126565 | 0.201807 | 23.385 / 31.961 |
+| Varying-illu02 | 1,465 | 1,462 | 0.138227 | 0.033093 | 0.127546 | 0.200847 | 23.851 / 32.297 |
+| Sha-turn01 | 1,390 | 1,387 | 0.200092 | 0.063261 | 0.237857 | 0.348379 | 25.892 / 33.775 |
+| Sha-turn02 | 1,004 | 1,002 | 0.144480 | 0.051734 | 0.173198 | 0.259183 | 26.162 / 33.297 |
+
+- All six runs produced finite, timestamp-increasing trajectories with full GT timestamp matching and no shutdown SIGSEGV, IMU/LiDAR loopback, or out-of-sync diagnostic. The maximum individual frame times were 46.418–79.781 ms for these six runs.
+- These metrics are position-only despite the valid VRPN quaternion fields because the current evaluator intentionally fixes the position protocol and does not yet compensate an independently verified rigid transform between the VRPN body and estimator IMU. They are baseline coverage, not a full-pose accuracy claim.
+- The dynamic and turn sequences are not clean static-scene tests: moving objects and high angular motion can alter point-to-plane residual statistics and map consistency. Separating those effects requires the planned diagnostics, not post-hoc attribution from ATE alone.
+- Artifacts are under `/home/liu/fast_livo2/results/phase2_hku_ros2_audit/A015_<sequence>/`; each directory contains `trajectory.tum`, `position_metrics.json`, `run_summary.txt`, `summary.json`, and ROS logs.
+
 ## Next audit actions
 
 1. Extend the accepted A-015 LIO regression to the newly available Dynamic/Varying-illu/Sha-turn sequence matrix, using the audited GT files and recording frame/GT alignment limits per sequence.
