@@ -21,6 +21,9 @@ Every item is kept separate until it has a source location, reference comparison
 | A-003 | ROS 2 port defect | fixed, full Outdoor01 LIO regression passed | TF broadcaster was reconstructed on every odometry publication |
 | A-004 | ROS 2 shutdown race | fixed, full Outdoor01 regression passed | shutdown could invalidate the ROS context between loop check, `spin_some`, and publication |
 | A-005 | ROS 2 port defect | fixed, full Outdoor01 LIO regression passed; LIVO pending | `main.cpp` constructed an `ImageTransport` from a null node pointer |
+| A-006 | upstream output-time contract defect | fixed, short regression passed | state-derived ROS messages used publication wall time instead of the state measurement time |
+| A-007 | ROS 2 port defect | confirmed, unfixed | standard `PointCloud2` input lost the official `lidar_time_offset` parameter and correction |
+| A-008 | upstream output covariance defect | confirmed, unfixed | odometry publishes an all-zero covariance despite a nonzero internal ESIKF covariance |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -125,6 +128,28 @@ All three trials used the frozen Phase 1 normal-rate protocol, independent ROS d
 - The new timestamp policy completes initialization one LiDAR frame earlier than the old baseline and therefore produces one additional pose. Its ATE is 0.042% above the best old run and 2.17% below the other two old runs. These comparisons do not establish an accuracy improvement; they show no material position-accuracy regression while removing the measured nondeterminism.
 - The machine-readable three-run summary is stored at `results/phase2_hku_ros2_audit/Outdoor01/three_run_summary.json` outside the source repository and has SHA-256 `20a01699c51d90484f1ed81208746b9aab851c67b637d0268f4a70d71ad320e0`.
 - The available GT remains position-only. None of these results validates rotational accuracy or full SE(3) accuracy.
+
+## A-006: output messages stamped in the wrong time domain
+
+### Source comparison and measured impact
+
+- Both the HKU ROS 1 source and the chaoo0 ROS 2 port stamp state-derived odometry, TF, path poses, registered point clouds, effect points, and the processed image with publication wall time.
+- The state itself is propagated or updated to `LidarMeasures.last_lio_update_time`; the TUM output already uses that sensor time.
+- During an `Outdoor01` replay without `/clock`, one captured odometry pose matched trajectory row 6 at sensor time `1735888008.818572`, but its ROS header was `1789100439.163598001`. The 53,212,430.345-second difference prevents correct offline association and time-consistent TF lookup.
+- The published `nav_msgs/Path` also retained its construction-time header stamp while appending poses with later publication stamps.
+
+### Fix
+
+All state-derived products now use `sec2Stamp(LidarMeasures.last_lio_update_time)`. Odometry and its TF share the same measurement stamp; each path pose and the path header are updated together. IMU-propagated odometry remains stamped with its corresponding IMU message and is unchanged.
+
+This is a metadata correction and does not alter the estimator state, covariance, measurement grouping, or map contents.
+
+### Verification
+
+- Clean ROS 2 Humble Release build: pass.
+- The post-fix capture of the same pose had ROS time `1735888008.818572282`; its TUM row was `1735888008.818572`. The 0.282-microsecond displayed difference is only the TUM file's six-decimal formatting.
+- The 35-pose pre-fix and post-fix short trajectories are byte-identical with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`.
+- The mapper finished cleanly with no loopback or synchronization warning. This validates the LIO publication path; the visual publication path remains subject to later LIVO testing.
 
 ## Next audit actions
 
