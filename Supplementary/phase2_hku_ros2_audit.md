@@ -32,6 +32,7 @@ Every item is kept separate until it has a source location, reference comparison
 | A-014 | ROS 2 port defect | fixed, synthetic/normal regression passed | Ouster point-time sorting was removed and Pandar128 absolute time/schema replaced the required relative scan-time contract |
 | A-015 | upstream point-covariance frame defect | fixed, mathematical/unit/full Outdoor01 regression passed; cross-sequence validation pending | map-point pose uncertainty omitted the world rotation and rotation-position cross covariance |
 | A-016 | audit-tool numerical reporting defect | fixed, unit-tested | pairwise comparison amplified one-ulp quaternion normalization noise into a fictitious nonzero angle |
+| A-017 | upstream zero-effective-feature robustness defect | confirmed by control-flow inspection; dataset trigger and fix pending | zero matched planes are divided into the residual average and passed into a zero-row ESIKF update |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -344,6 +345,19 @@ The same optimized LIO binary, M3DGR MID360 configuration, position-only alignme
 - These metrics are position-only despite the valid VRPN quaternion fields because the current evaluator intentionally fixes the position protocol and does not yet compensate an independently verified rigid transform between the VRPN body and estimator IMU. They are baseline coverage, not a full-pose accuracy claim.
 - The dynamic and turn sequences are not clean static-scene tests: moving objects and high angular motion can alter point-to-plane residual statistics and map consistency. Separating those effects requires the planned diagnostics, not post-hoc attribution from ATE alone.
 - Artifacts are under `/home/liu/fast_livo2/results/phase2_hku_ros2_audit/A015_<sequence>/`; each directory contains `trajectory.tum`, `position_metrics.json`, `run_summary.txt`, `summary.json`, and ROS logs.
+
+## A-017: zero-effective-feature path is not fail-closed
+
+### Source comparison and trigger
+
+- Both the frozen HKU source and the ROS 2 port compute `total_residual / effct_feat_num_` immediately after `BuildResidualListOMP()`, without checking whether `effct_feat_num_` is zero. They then construct `Hsub`, `Hsub_T_R_inv`, `R_inv`, and `meas_vec` with zero rows and continue into the ESIKF matrix inverse.
+- A reproducible trigger is a scan whose transformed points find no valid voxel plane: an empty/isolated local map, a deliberately over-restrictive plane gate, or a synthetic teleport between two scans. The minimum experiment is to force that condition after map initialization and capture the residual log, state finiteness, covariance finiteness, and subsequent map update.
+
+### Evidence and impact boundary
+
+- This is a confirmed divide-by-zero/control-flow defect by inspection, classified as an upstream robustness defect. It is not yet a confirmed trajectory defect: the zero-row Eigen products and the subsequent `P.inverse()` behavior still require the synthetic trigger experiment.
+- The six new M3DGR runs and the three Outdoor01 A015 runs had no `effective feature num: 0` record; their minimum effective feature counts were in the thousands. Therefore current GT metrics provide no evidence about this path.
+- Until the synthetic trigger is run, no fix is committed. The safe candidate is an explicit fail-closed branch that retains the propagated state/covariance, reports the rejected update, and lets the caller perform only the separately audited map-write policy.
 
 ## Next audit actions
 
