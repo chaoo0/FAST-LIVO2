@@ -25,6 +25,7 @@ Every item is kept separate until it has a source location, reference comparison
 | A-007 | ROS 2 port defect | fixed, zero-offset M3DGR regression passed | ROS 2 dropped the official IMU/LiDAR time-offset parameter contract |
 | A-008 | upstream output covariance defect | fixed, unit and short runtime regression passed | odometry published an all-zero covariance despite a nonzero internal ESIKF covariance |
 | A-009 | upstream output completeness limitation | under investigation | odometry twist and twist covariance remain default zero although velocity is estimated |
+| A-010 | ROS 2 port defect | fixed, ownership tests passed; LIVO replay pending | queued images could outlive the ROS message storage shared by their `cv::Mat` |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -190,6 +191,23 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - The 35-pose trajectory remained byte-identical to the pre-A-008 run with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`, and the mapper finished cleanly.
 - 【未知】Positive semidefiniteness of one sample does not establish covariance consistency. NEES/NIS or empirical coverage against reliable full-pose GT remains required before using this covariance as a calibrated confidence signal.
 - Twist fields are deliberately unchanged in this fix. Their frame and covariance require a separate contract (A-009).
+
+## A-010: queued image lifetime lost in the ROS 2 port
+
+### Source comparison and failure mechanism
+
+- The frozen HKU implementation converts each ROS image with `cv_bridge::toCvCopy(..., "bgr8")` before storing the resulting `cv::Mat`.
+- The ROS 2 migration changed this to `toCvShare()` while `img_buffer` continued to store only `cv::Mat`; it does not retain the returned `CvImageConstPtr` or the ROS message.
+- When the source encoding is already `bgr8`, `toCvShare()` points the matrix at the ROS message's external byte buffer. Copying only the matrix header does not retain the tracked ROS-message owner. Once the callback-local message and temporary `CvImageConstPtr` are destroyed, the queued matrix can dangle.
+- This path is disabled in the accepted Phase-1 LIO runs, so the defect cannot explain their trajectory. It can cause invalid image reads or nondeterministic visual residuals when LIVO is enabled.
+
+### Fix and verification
+
+- Restore `toCvCopy()` so the queued `cv::Mat` owns a reference-counted OpenCV allocation independent of the ROS message lifetime.
+- A structural ownership test using a same-encoding `bgr8` message confirmed that the `toCvShare()` matrix aliases the message buffer and does not keep the message alive.
+- A regression test confirmed that the `toCvCopy()` matrix uses independent storage and preserves both test pixels after the ROS message expires.
+- Clean Release build and the complete current unit-test set passed: 7 tests, 0 errors, 0 failures, 0 skipped.
+- 【未知】No dataset-level LIVO replay is claimed here. Camera calibration and the published 0.1 s M3DGR image offset must be validated before a LIVO trajectory can serve as regression evidence.
 
 ## Next audit actions
 
