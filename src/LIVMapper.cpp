@@ -13,6 +13,9 @@ which is included as part of this source code package.
 #include "LIVMapper.h"
 #include <vikit/camera_loader.h>
 
+#include <cmath>
+#include <stdexcept>
+
 using namespace Sophus;
 LIVMapper::LIVMapper(const rclcpp::Node::SharedPtr &node)
     : node(node),
@@ -785,27 +788,40 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstShare
 {
   if (!lidar_en) return;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> buffered_initial_imus;
-  mtx_buffer.lock();
-  const double cur_head_time = stamp2Sec(msg->header.stamp) + lidar_time_offset;
-  // cout<<"got feature"<<endl;
-  if (cur_head_time < last_timestamp_lidar)
   {
-    RCLCPP_ERROR(this->node->get_logger(),"lidar loop back, clear buffer");
-    lid_raw_data_buffer.clear();
-  }
-  // ROS_INFO("get point cloud at time: %.6f", stamp2Sec(msg->header.stamp));
-  PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
-  p_pre->process(msg, ptr);
-  lid_raw_data_buffer.push_back(ptr);
-  lid_header_time_buffer.push_back(cur_head_time);
-  last_timestamp_lidar = cur_head_time;
-  if (first_timestamp_lidar < 0.0)
-  {
-    first_timestamp_lidar = last_timestamp_lidar;
-    buffered_initial_imus.swap(initial_imu_buffer);
-  }
+    std::lock_guard<std::mutex> lock(mtx_buffer);
+    const double cur_head_time = stamp2Sec(msg->header.stamp) + lidar_time_offset;
+    if (!std::isfinite(cur_head_time))
+    {
+      RCLCPP_ERROR(this->node->get_logger(), "rejecting point cloud with a non-finite timestamp");
+      return;
+    }
+    if (last_timestamp_lidar >= 0.0 && cur_head_time <= last_timestamp_lidar)
+    {
+      RCLCPP_ERROR(
+        this->node->get_logger(),
+        "rejecting non-increasing LiDAR frame (current %.9f, last %.9f); restart the node for a new time epoch",
+        cur_head_time, last_timestamp_lidar);
+      return;
+    }
 
-  mtx_buffer.unlock();
+    PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+    p_pre->process(msg, ptr);
+    if (!ptr || ptr->size() <= 1)
+    {
+      RCLCPP_ERROR(this->node->get_logger(), "rejecting point cloud with fewer than two usable points");
+      return;
+    }
+
+    lid_raw_data_buffer.push_back(ptr);
+    lid_header_time_buffer.push_back(cur_head_time);
+    last_timestamp_lidar = cur_head_time;
+    if (first_timestamp_lidar < 0.0)
+    {
+      first_timestamp_lidar = last_timestamp_lidar;
+      buffered_initial_imus.swap(initial_imu_buffer);
+    }
+  }
   if (!buffered_initial_imus.empty())
   {
     RCLCPP_INFO(this->node->get_logger(), "Replaying %zu IMU messages buffered before the first LiDAR callback", buffered_initial_imus.size());
@@ -818,48 +834,48 @@ void LIVMapper::livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::ConstShar
 {
   if (!lidar_en) return;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> buffered_initial_imus;
-  mtx_buffer.lock();
-  livox_ros_driver2::msg::CustomMsg::SharedPtr msg(new livox_ros_driver2::msg::CustomMsg(*msg_in));
-  // if ((abs(stamp2Sec(msg->header.stamp) - last_timestamp_lidar) > 0.2 && last_timestamp_lidar > 0) || sync_jump_flag)
-  // {
-  //   ROS_WARN("lidar jumps %.3f\n", stamp2Sec(msg->header.stamp) - last_timestamp_lidar);
-  //   sync_jump_flag = true;
-  //   msg->header.stamp = rclcpp::Time().fromSec(last_timestamp_lidar + 0.1);
-  // }
-  if (abs(last_timestamp_imu - stamp2Sec(msg->header.stamp)) > 1.0 && !imu_buffer.empty())
   {
-    double timediff_imu_wrt_lidar = last_timestamp_imu - stamp2Sec(msg->header.stamp);
-    RCLCPP_INFO(this->node->get_logger(), "\033[95mSelf sync IMU and LiDAR, HARD time lag is %.10lf \n\033[0m", timediff_imu_wrt_lidar - 0.100);
-    // imu_time_offset = timediff_imu_wrt_lidar;
-  }
+    std::lock_guard<std::mutex> lock(mtx_buffer);
+    livox_ros_driver2::msg::CustomMsg::SharedPtr msg(new livox_ros_driver2::msg::CustomMsg(*msg_in));
+    const double cur_head_time = stamp2Sec(msg->header.stamp);
+    if (!std::isfinite(cur_head_time))
+    {
+      RCLCPP_ERROR(this->node->get_logger(), "rejecting Livox cloud with a non-finite timestamp");
+      return;
+    }
+    if (last_timestamp_lidar >= 0.0 && cur_head_time <= last_timestamp_lidar)
+    {
+      RCLCPP_ERROR(
+        this->node->get_logger(),
+        "rejecting non-increasing LiDAR frame (current %.9f, last %.9f); restart the node for a new time epoch",
+        cur_head_time, last_timestamp_lidar);
+      return;
+    }
 
-  double cur_head_time = stamp2Sec(msg->header.stamp);
-  RCLCPP_INFO(this->node->get_logger(), "Get LiDAR, its header time: %.6f", cur_head_time);
-  if (cur_head_time < last_timestamp_lidar)
-  {
-    RCLCPP_ERROR(this->node->get_logger(), "lidar loop back, clear buffer");
-    lid_raw_data_buffer.clear();
-  }
-  RCLCPP_INFO(this->node->get_logger(), "get point cloud at time: %.6f", stamp2Sec(msg->header.stamp));
-  PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
-  p_pre->process(msg, ptr);
+    if (std::abs(last_timestamp_imu - cur_head_time) > 1.0 && !imu_buffer.empty())
+    {
+      const double timediff_imu_wrt_lidar = last_timestamp_imu - cur_head_time;
+      RCLCPP_INFO(this->node->get_logger(), "\033[95mSelf sync IMU and LiDAR, HARD time lag is %.10lf \n\033[0m", timediff_imu_wrt_lidar - 0.100);
+    }
 
-  if (!ptr || ptr->empty()) {
-    RCLCPP_ERROR(this->node->get_logger(), "Received an empty point cloud");
-    mtx_buffer.unlock();
-    return;
-  }
+    RCLCPP_INFO(this->node->get_logger(), "Get LiDAR, its header time: %.6f", cur_head_time);
+    PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+    p_pre->process(msg, ptr);
+    if (!ptr || ptr->size() <= 1)
+    {
+      RCLCPP_ERROR(this->node->get_logger(), "rejecting Livox cloud with fewer than two usable points");
+      return;
+    }
 
-  lid_raw_data_buffer.push_back(ptr);
-  lid_header_time_buffer.push_back(cur_head_time);
-  last_timestamp_lidar = cur_head_time;
-  if (first_timestamp_lidar < 0.0)
-  {
-    first_timestamp_lidar = cur_head_time;
-    buffered_initial_imus.swap(initial_imu_buffer);
+    lid_raw_data_buffer.push_back(ptr);
+    lid_header_time_buffer.push_back(cur_head_time);
+    last_timestamp_lidar = cur_head_time;
+    if (first_timestamp_lidar < 0.0)
+    {
+      first_timestamp_lidar = cur_head_time;
+      buffered_initial_imus.swap(initial_imu_buffer);
+    }
   }
-
-  mtx_buffer.unlock();
   if (!buffered_initial_imus.empty())
   {
     RCLCPP_INFO(this->node->get_logger(), "Replaying %zu IMU messages buffered before the first LiDAR callback", buffered_initial_imus.size());
@@ -1019,6 +1035,20 @@ void LIVMapper::img_cbk(const sensor_msgs::msg::Image::ConstSharedPtr &msg_in)
 
 bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 {
+  if (lid_raw_data_buffer.size() != lid_header_time_buffer.size())
+  {
+    RCLCPP_FATAL(
+      this->node->get_logger(), "internal LiDAR queue invariant violated: %zu clouds, %zu timestamps",
+      lid_raw_data_buffer.size(), lid_header_time_buffer.size());
+    throw std::logic_error("LiDAR data/time queues are inconsistent");
+  }
+  if (img_buffer.size() != img_time_buffer.size())
+  {
+    RCLCPP_FATAL(
+      this->node->get_logger(), "internal image queue invariant violated: %zu images, %zu timestamps",
+      img_buffer.size(), img_time_buffer.size());
+    throw std::logic_error("image data/time queues are inconsistent");
+  }
   if (lid_raw_data_buffer.empty() && lidar_en) return false;
   if (img_buffer.empty() && img_en) return false;
   if (imu_buffer.empty() && imu_en) return false;

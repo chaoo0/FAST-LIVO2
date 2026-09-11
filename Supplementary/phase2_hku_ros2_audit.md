@@ -27,6 +27,7 @@ Every item is kept separate until it has a source location, reference comparison
 | A-009 | upstream output completeness limitation | under investigation | odometry twist and twist covariance remain default zero although velocity is estimated |
 | A-010 | ROS 2 port defect | fixed, ownership tests passed; LIVO replay pending | queued images could outlive the ROS message storage shared by their `cv::Mat` |
 | A-011 | ROS 2 port defect | fixed, unit/synthetic/normal regression passed | one IMU gap over 0.2 s caused every later IMU message to be rejected |
+| A-012 | upstream input-buffer defect | fixed, synthetic and normal regressions passed | LiDAR time reversal cleared only clouds, not their paired timestamps; unusable scans could stall the queue |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -226,6 +227,25 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - Outdoor01 contains 82,312 IMU records with zero header inversions and an observed maximum gap of about 6.71 ms, so the 0.2 s branch is not exercised by the accepted baseline dataset.
 - A normal short replay produced 31 poses byte-identical to the first 31 poses of the A-008 reference. Both prefixes have SHA-256 `d95c51ba6ad9a8e7574ef540013cbda368b5b1a2f5ae06d9ee6963832286070d`; the mapper exited cleanly with no time-jump or loopback warning.
 - 【未知】Accepting data after a large gap prevents the permanent software freeze but does not make the propagated state accurate across missing IMU coverage. Gap duration must become a diagnostic/failure input, and accuracy after such gaps requires a separate controlled experiment.
+
+## A-012: LiDAR queue desynchronization and unusable-scan stall
+
+### Source comparison and failure mechanism
+
+- Both the frozen HKU source and the ROS 2 port clear `lid_raw_data_buffer` when LiDAR time moves backward but leave `lid_header_time_buffer` unchanged. The producer then appends one new cloud and one new timestamp, while `sync_packages()` assumes both deques have equal length and pops them in lockstep.
+- Once the old timestamp prefix is longer than the repeated input prefix, a new cloud can be paired with an unrelated old time. That corrupts scan begin/end time, IMU selection, de-skew, and the state/map update chronology.
+- The standard callback had no post-preprocessing empty check; the Livox callback rejected only exactly zero points. In `ONLY_LIO`, a scan with at most one usable point makes `sync_packages()` return before popping it, causing permanent head-of-line blocking.
+- Clearing both queues and continuing is still insufficient after a real epoch reset because the ESIKF state, IMU integrator, voxel map, VIO state, and published trajectory are not atomically reset by this code.
+
+### Fix and verification
+
+- Reject non-finite and non-increasing LiDAR timestamps before preprocessing/enqueue, preserving all existing data/time pairs. The diagnostic explicitly requires a node restart for a new time epoch.
+- Reject scans with fewer than two usable points in both LiDAR callbacks before they reach the synchronization queue.
+- Check the LiDAR-data/time and image-data/time deque size invariants at the `sync_packages()` boundary. Any internal mismatch is fatal rather than allowing a wrong timestamp association.
+- Replaying an initial LiDAR-only segment twice caused the repeated older frames to be rejected without an invariant failure. That experiment also exposed an equal-timestamp duplicate, after which the guard was tightened from decreasing to non-increasing.
+- A final callback-level test accepted one two-point Livox scan at 100 s, rejected a second scan at the same stamp before preprocessing, then rejected a zero-point scan at 101 s before enqueue. The node exited cleanly.
+- A normal Outdoor01 short replay produced 35 poses byte-identical to A-008, with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`; there were no rejection, time-jump, or queue-invariant diagnostics.
+- 【未知】The standard `PointCloud2` callback shares the same source-level guards but has not yet received a dataset-level nonempty/empty regression. Cross-bag in-process reset remains deliberately unsupported.
 
 ## Next audit actions
 
