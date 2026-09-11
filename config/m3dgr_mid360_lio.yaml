@@ -26,9 +26,8 @@
       Pcl: [-0.0442358, -0.4117120, 0.1685680]
 
     time_offset:
-      # The ROS2 baseline does not read imu_time_offset; zero is documented
-      # here, not relied upon as a configurable correction.
       imu_time_offset: 0.0                     # seconds
+      lidar_time_offset: 0.0                   # seconds; standard PointCloud2 only, unused by Livox CustomMsg
       img_time_offset: 0.1                     # seconds; unused in LIO
       exposure_time_init: 0.0                  # seconds; unused in LIO
 

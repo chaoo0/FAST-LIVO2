@@ -87,6 +87,8 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   try_declare.template operator()<int>("vio.outlier_threshold", 100);
   try_declare.template operator()<double>("time_offset.exposure_time_init", 0.0);
   try_declare.template operator()<double>("time_offset.img_time_offset", 0.0);
+  try_declare.template operator()<double>("time_offset.imu_time_offset", 0.0);
+  try_declare.template operator()<double>("time_offset.lidar_time_offset", 0.0);
   try_declare.template operator()<bool>("uav.imu_rate_odom", false);
   try_declare.template operator()<bool>("uav.gravity_align_en", false);
 
@@ -145,6 +147,8 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("vio.outlier_threshold", outlier_threshold);
   this->node->get_parameter("time_offset.exposure_time_init", exposure_time_init);
   this->node->get_parameter("time_offset.img_time_offset", img_time_offset);
+  this->node->get_parameter("time_offset.imu_time_offset", imu_time_offset);
+  this->node->get_parameter("time_offset.lidar_time_offset", lidar_time_offset);
   this->node->get_parameter("uav.imu_rate_odom", imu_prop_enable);
   this->node->get_parameter("uav.gravity_align_en", gravity_align_en);
 
@@ -782,8 +786,9 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstShare
   if (!lidar_en) return;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> buffered_initial_imus;
   mtx_buffer.lock();
+  const double cur_head_time = stamp2Sec(msg->header.stamp) + lidar_time_offset;
   // cout<<"got feature"<<endl;
-  if (stamp2Sec(msg->header.stamp) < last_timestamp_lidar)
+  if (cur_head_time < last_timestamp_lidar)
   {
     RCLCPP_ERROR(this->node->get_logger(),"lidar loop back, clear buffer");
     lid_raw_data_buffer.clear();
@@ -792,8 +797,8 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstShare
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
   p_pre->process(msg, ptr);
   lid_raw_data_buffer.push_back(ptr);
-  lid_header_time_buffer.push_back(stamp2Sec(msg->header.stamp));
-  last_timestamp_lidar = stamp2Sec(msg->header.stamp);
+  lid_header_time_buffer.push_back(cur_head_time);
+  last_timestamp_lidar = cur_head_time;
   if (first_timestamp_lidar < 0.0)
   {
     first_timestamp_lidar = last_timestamp_lidar;

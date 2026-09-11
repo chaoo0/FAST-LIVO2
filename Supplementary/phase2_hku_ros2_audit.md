@@ -22,7 +22,7 @@ Every item is kept separate until it has a source location, reference comparison
 | A-004 | ROS 2 shutdown race | fixed, full Outdoor01 regression passed | shutdown could invalidate the ROS context between loop check, `spin_some`, and publication |
 | A-005 | ROS 2 port defect | fixed, full Outdoor01 LIO regression passed; LIVO pending | `main.cpp` constructed an `ImageTransport` from a null node pointer |
 | A-006 | upstream output-time contract defect | fixed, short regression passed | state-derived ROS messages used publication wall time instead of the state measurement time |
-| A-007 | ROS 2 port defect | confirmed, unfixed | standard `PointCloud2` input lost the official `lidar_time_offset` parameter and correction |
+| A-007 | ROS 2 port defect | fixed, zero-offset M3DGR regression passed | ROS 2 dropped the official IMU/LiDAR time-offset parameter contract |
 | A-008 | upstream output covariance defect | confirmed, unfixed | odometry publishes an all-zero covariance despite a nonzero internal ESIKF covariance |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
@@ -150,6 +150,27 @@ This is a metadata correction and does not alter the estimator state, covariance
 - The post-fix capture of the same pose had ROS time `1735888008.818572282`; its TUM row was `1735888008.818572`. The 0.282-microsecond displayed difference is only the TUM file's six-decimal formatting.
 - The 35-pose pre-fix and post-fix short trajectories are byte-identical with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`.
 - The mapper finished cleanly with no loopback or synchronization warning. This validates the LIO publication path; the visual publication path remains subject to later LIVO testing.
+
+## A-007: dropped input time-offset parameters in the ROS 2 port
+
+### Source comparison and impact
+
+- The HKU reference declares and reads both `time_offset/imu_time_offset` and `time_offset/lidar_time_offset`. It subtracts the IMU offset before synchronization and adds the LiDAR offset in the standard `sensor_msgs/PointCloud2` callback.
+- The ROS 2 port retained `imu_time_offset` in the correction expression but never declared or read the parameter, leaving it permanently at its member default of zero.
+- The ROS 2 port removed the `lidar_time_offset` member and used the uncorrected header stamp in the standard point-cloud callback.
+- This defect does not affect the current M3DGR Livox CustomMsg run because its configured IMU offset is zero and the official custom-message path does not apply `lidar_time_offset`. It does make nonzero IMU calibration ineffective and breaks parity for standard point-cloud datasets such as the official NTU-VIRAL configuration.
+
+### Fix
+
+Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` to the standard point-cloud scan time exactly where the HKU reference does. The M3DGR YAML now states explicitly that its zero LiDAR offset is unused by Livox CustomMsg.
+
+### Verification
+
+- Clean ROS 2 Humble Release build: pass.
+- Runtime parameter introspection reports both `time_offset.imu_time_offset` and `time_offset.lidar_time_offset` as declared doubles with the configured M3DGR value `0.0`.
+- The 35-pose zero-offset M3DGR regression is byte-identical to the pre-A-007 trajectory; both have SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`.
+- The mapper finished cleanly with no loopback or synchronization warning.
+- 【未知】A real standard-PointCloud2 dataset with a calibrated nonzero LiDAR offset has not yet been replayed, so that branch has source-parity and build evidence but not dataset-level validation.
 
 ## Next audit actions
 
