@@ -28,6 +28,7 @@ Every item is kept separate until it has a source location, reference comparison
 | A-010 | ROS 2 port defect | fixed, ownership tests passed; LIVO replay pending | queued images could outlive the ROS message storage shared by their `cv::Mat` |
 | A-011 | ROS 2 port defect | fixed, unit/synthetic/normal regression passed | one IMU gap over 0.2 s caused every later IMU message to be rejected |
 | A-012 | upstream input-buffer defect | fixed, synthetic and normal regressions passed | LiDAR time reversal cleared only clouds, not their paired timestamps; unusable scans could stall the queue |
+| A-013 | ROS 2 port defect | fixed, unit/runtime/normal regression passed | source read `lio.min_iterations` while upstream and shipped configurations set `lio.max_iterations` |
 
 ## A-001: Eigen/PCL allocator ABI mismatch
 
@@ -246,6 +247,23 @@ Restore both ROS 2 parameters with zero defaults and apply `lidar_time_offset` t
 - A final callback-level test accepted one two-point Livox scan at 100 s, rejected a second scan at the same stamp before preprocessing, then rejected a zero-point scan at 101 s before enqueue. The node exited cleanly.
 - A normal Outdoor01 short replay produced 35 poses byte-identical to A-008, with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`; there were no rejection, time-jump, or queue-invariant diagnostics.
 - 【未知】The standard `PointCloud2` callback shares the same source-level guards but has not yet received a dataset-level nonempty/empty regression. Cross-bag in-process reset remains deliberately unsupported.
+
+## A-013: LIO maximum-iteration parameter typo
+
+### Source comparison and impact
+
+- The frozen HKU implementation reads `lio/max_iterations` into `VoxelMapConfig::max_iterations_`, and every shipped ROS 2 dataset configuration also uses `lio.max_iterations`.
+- The ROS 2 loader instead declared/read `lio.min_iterations`. Consequently, changing the documented `max_iterations` key had no effect and the estimator silently retained the default value 5.
+- The Phase-1 M3DGR configuration temporarily set both names to 5 only to preserve baseline behavior. That workaround did not make the source contract correct.
+
+### Fix and verification
+
+- Restore `lio.max_iterations` as the canonical parameter. If and only if an existing configuration supplies the old `min_iterations` typo without the canonical key, accept it with a deprecation warning; if both are present, the canonical key wins.
+- Reject non-positive selected values at startup instead of running an empty/invalid iterative update.
+- Four unit tests cover canonical selection, legacy-only compatibility, canonical precedence, and invalid values.
+- Runtime parameter inspection with the M3DGR configuration reports `lio.max_iterations = 5`; `lio.min_iterations` is absent. The temporary duplicate key was removed from the M3DGR YAML.
+- A normal Outdoor01 short replay produced 35 poses byte-identical to A-008/A-012, with SHA-256 `cdc63fdeca5900d915371e9893d07b83b8c32bf4eb15b612a0bd7862a2cee2de`, and the mapper exited cleanly.
+- 【未知】Iteration counts other than 5 are now wired correctly but have not been claimed to improve accuracy or convergence. They require parameter-sweep evidence and must not be tuned on the frozen test bags.
 
 ## Next audit actions
 

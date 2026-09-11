@@ -53,9 +53,6 @@
       ba_bg_est_en: true
 
     lio:
-      # The d6e22ad ROS2 baseline accidentally reads lio.min_iterations.
-      # Setting both keys to 5 preserves the baseline default without a core fix.
-      min_iterations: 5
       max_iterations: 5
       dept_err: 0.02                           # metres, range uncertainty scale
       beam_err: 0.05                           # degrees, beam angular uncertainty

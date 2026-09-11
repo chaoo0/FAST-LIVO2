@@ -217,6 +217,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_timestamp_utils test/test_timestamp_utils.cpp)
   target_include_directories(test_timestamp_utils PRIVATE include)
+
+  ament_add_gtest(test_parameter_utils test/test_parameter_utils.cpp)
+  target_include_directories(test_parameter_utils PRIVATE include)
 endif()
 
 # Export dependencies
